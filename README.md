@@ -23,6 +23,8 @@
 | 启动动画 | 可替换为自定义动画并完整播放；关闭后完全沿用官方启动页 |
 | 裁剪 | 场景壁纸可拖动调整裁剪位置，独立窗口实时预览 |
 | 快捷键 | 五类操作可自定义，支持冲突检测与恢复默认 |
+| 歌词补丁 | 在 M HUB 内显示歌词（可随安装器一并部署） |
+| 仪表板 | 系统监控与桌面悬浮窗（可随安装器一并部署） |
 | 卸载还原 | 恢复官方 `app.asar` 与官方启动页，清理插件文件 |
 
 ## 环境要求
@@ -70,7 +72,7 @@
 powershell -ExecutionPolicy Bypass -File .\build\build.ps1
 ```
 
-产物：`dist\M-HUB-Wallpaper-Startup-Plugin.exe`，脚本会打印文件大小与 SHA256。
+产物：`dist\M-HUB-Wallpaper-Startup-Plugin-<版本>.exe`，脚本会打印文件大小与 SHA256。版本号取自最近的 git tag。
 
 安装器使用 .NET Framework 的 `csc.exe` 编译，`payload` 以嵌入资源方式打包，无需额外依赖。
 
@@ -84,8 +86,8 @@ src/payload/bootstrap/           独立加载入口（package.json + out/main/in
 src/payload/pethub/              启动页关闭保护 + 壁纸加载 shim
 src/payload/wallpaper-hub/       壁纸主进程插件（扫描、协议、快捷键、注入）
 src/payload/renderer/            启动动画页面、样式、脚本与音效
-src/third-party/lyric-bridge/    歌词补丁（第三方，见 NOTICE.md）
-src/third-party/sysdeck/         仪表板（第三方，见 NOTICE.md）
+src/plugins/lyric-bridge/        歌词补丁
+src/plugins/sysdeck/             仪表板
 ```
 
 ## 常见问题
@@ -108,4 +110,4 @@ v3.4.0 已强制壁纸层 `pointer-events:none`，并把背景层压到最底层
 
 ## 许可证
 
-个人非商业使用 + 相同方式共享，详见 [LICENSE](LICENSE)。第三方组件不在此许可证范围内，详见 [NOTICE.md](NOTICE.md)。
+个人非商业使用 + 相同方式共享，详见 [LICENSE](LICENSE)。

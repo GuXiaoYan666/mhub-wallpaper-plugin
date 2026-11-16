@@ -24,11 +24,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: M-HUB-Wallpaper-Startup-Plugin
-          path: dist/M-HUB-Wallpaper-Startup-Plugin.exe
+          path: dist/*.exe
 
       - name: Create release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/M-HUB-Wallpaper-Startup-Plugin.exe
+          files: dist/*.exe
           generate_release_notes: true

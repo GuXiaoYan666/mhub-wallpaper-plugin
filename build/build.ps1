@@ -1,32 +1,39 @@
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
-$stage = Join-Path $root 'build\payload-stage'
+$work = Join-Path $env:TEMP ("mhub-wallpaper-build-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$stage = Join-Path $work 'payload-stage'
 $dist = Join-Path $root 'dist'
-$zip = Join-Path $root 'build\payload.zip'
-$out = Join-Path $dist 'M-HUB-Wallpaper-Startup-Plugin.exe'
+$zip = Join-Path $work 'payload.zip'
 $installer = Join-Path $root 'src\installer\Installer.cs'
 $manifest = Join-Path $root 'src\installer\app.manifest'
 
-Write-Host '[1/4] Stage payload'
-if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+$version = 'dev'
+try {
+    $tag = (git -C $root describe --tags --abbrev=0 2>$null)
+    if ($tag) { $version = $tag.TrimStart('v') }
+} catch { }
+$out = Join-Path $dist ("M-HUB-Wallpaper-Startup-Plugin-" + $version + ".exe")
+
+Write-Host "[1/4] Stage payload (version $version)"
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 Copy-Item (Join-Path $root 'src\payload\*') $stage -Recurse -Force
 foreach ($name in @('lyric-bridge', 'sysdeck')) {
-    $src = Join-Path $root "src\third-party\$name"
+    $src = Join-Path $root "src\plugins\$name"
     if (Test-Path $src) {
         Copy-Item $src (Join-Path $stage $name) -Recurse -Force
     }
 }
 
 Write-Host '[2/4] Pack payload.zip'
-if (Test-Path $zip) { Remove-Item $zip -Force }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [System.IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip, [System.IO.Compression.CompressionLevel]::Optimal, $false)
 
 Write-Host '[3/4] Compile installer'
 if (-not (Test-Path $dist)) { New-Item -ItemType Directory -Path $dist -Force | Out-Null }
-if (Test-Path $out) { Remove-Item $out -Force }
+if (Test-Path $out) {
+    $out = Join-Path $dist ("M-HUB-Wallpaper-Startup-Plugin-" + $version + "-" + (Get-Date -Format 'HHmmss') + ".exe")
+}
 
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path $csc)) {
@@ -61,3 +68,4 @@ $hash = (Get-FileHash $out -Algorithm SHA256).Hash.ToLower()
 Write-Host ("Output: {0}" -f $file.FullName)
 Write-Host ("Size:   {0} bytes" -f $file.Length)
 Write-Host ("SHA256: {0}" -f $hash)
+Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue

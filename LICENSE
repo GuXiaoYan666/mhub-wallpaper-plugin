@@ -14,10 +14,7 @@ Personal, Non-Commercial Use License (Share-Alike)
    c) 以本许可证（或与之等效的个人非商业 + 相同方式共享条款）授权。
 2. 不得对衍生作品附加额外限制，阻碍他人依本许可证使用。
 
-三、第三方组件
-本仓库包含第三方组件（歌词补丁、仪表板）。这些组件不适用本许可证，其权利归原作者所有，详见 NOTICE.md。分发时请自行确认相应授权。
-
-四、免责声明
+三、免责声明
 本软件按“现状”提供，不提供任何明示或默示担保，包括但不限于适销性、特定用途适用性与非侵权担保。因使用本软件造成的任何直接或间接损失，作者不承担责任。
 
 ---
@@ -28,8 +25,5 @@ Anyone may use, copy, modify, merge, and distribute this software and derivative
 2. Share-Alike
 When distributing this software or derivative works, you must retain this license and copyright notice, publish the complete corresponding source code, and license it under this license (or equivalent personal non-commercial share-alike terms).
 
-3. Third-Party Components
-Third-party components bundled in this repository (lyric overlay, dashboard) are NOT covered by this license. All rights belong to their original authors; see NOTICE.md.
-
-4. Disclaimer
+3. Disclaimer
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM THE USE OF THE SOFTWARE.
