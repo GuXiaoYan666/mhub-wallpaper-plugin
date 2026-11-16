@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>SenseDeck</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
+  body { -webkit-user-select: none; }
+</style>
+</head>
+<body>
+<script>
+  window.__mcDeckDesktop = true;
+  window.__mcDeckHost = {
+    __installed: true,
+    onSnapshot: function (fn) {
+      if (window.sysdeckDesktop) window.sysdeckDesktop.onSnapshot(fn);
+    },
+    send: function (m) {
+      if (window.sysdeckDesktop) window.sysdeckDesktop.send(m);
+    },
+    ready: function () {
+      if (window.sysdeckDesktop) window.sysdeckDesktop.ready();
+    }
+  };
+</script>
+<script src="panel.js"></script>
+</body>
+</html>

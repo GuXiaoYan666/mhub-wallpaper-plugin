@@ -1,0 +1,35 @@
+个人非商业使用许可证（相同方式共享）
+Personal, Non-Commercial Use License (Share-Alike)
+
+版本 1.0 / Version 1.0
+
+一、授权范围
+1. 任何人可以出于个人、非商业目的使用、复制、修改、合并、发布本软件及其衍生作品。
+2. 不得将本软件或其衍生作品用于任何商业用途，包括但不限于销售、付费分发、随商业产品捆绑、商业服务中使用、以广告或订阅方式变现。
+
+二、相同方式共享
+1. 分发本软件或衍生作品时，必须：
+   a) 保留本许可证文件与版权声明；
+   b) 公开完整对应源代码；
+   c) 以本许可证（或与之等效的个人非商业 + 相同方式共享条款）授权。
+2. 不得对衍生作品附加额外限制，阻碍他人依本许可证使用。
+
+三、第三方组件
+本仓库包含第三方组件（歌词补丁、仪表板）。这些组件不适用本许可证，其权利归原作者所有，详见 NOTICE.md。分发时请自行确认相应授权。
+
+四、免责声明
+本软件按“现状”提供，不提供任何明示或默示担保，包括但不限于适销性、特定用途适用性与非侵权担保。因使用本软件造成的任何直接或间接损失，作者不承担责任。
+
+---
+
+1. Grant
+Anyone may use, copy, modify, merge, and distribute this software and derivative works for personal, non-commercial purposes only.
+
+2. Share-Alike
+When distributing this software or derivative works, you must retain this license and copyright notice, publish the complete corresponding source code, and license it under this license (or equivalent personal non-commercial share-alike terms).
+
+3. Third-Party Components
+Third-party components bundled in this repository (lyric overlay, dashboard) are NOT covered by this license. All rights belong to their original authors; see NOTICE.md.
+
+4. Disclaimer
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM THE USE OF THE SOFTWARE.

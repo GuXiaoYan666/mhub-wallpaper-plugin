@@ -1,0 +1,6 @@
+dist/
+build/payload-stage/
+*.zip
+*.log
+node_modules/
+.vs/

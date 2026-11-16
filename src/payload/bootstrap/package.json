@@ -1,0 +1,8 @@
+{
+  "name": "MCHOSEHUB",
+  "version": "1.0.0",
+  "description": "迈从驱动应用程序",
+  "main": "out/main/index.js",
+  "author": "迈从科技有限公司",
+  "homepage": "https://www.maicong.cn"
+}

@@ -1,0 +1,1476 @@
+'use strict';
+/*
+ * M HUB 壁纸插件：把 Wallpaper Engine 本地壁纸接进 M HUB 主界面。
+ * - 由独立 bootstrap 或 resources\app\pet-hub\index.js 的兼容 shim 装载。
+ * - 壁纸只作用于 M HUB 自身背景（.wallpaper-background），不再修改桌面壁纸。
+ * - 壁纸库与美化面板注入到「设置 → 主题设置」页面。
+ * - 上行 console.dir('[mhub-wp]'+JSON)，下行 window.__mhubWpReceive(JSON)。
+ */
+
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const crypto = require('crypto');
+const { execFileSync } = require('child_process');
+const { Readable } = require('stream');
+
+const SCHEME = 'mchose-wallpaper';
+const PREFIX = '[mhub-wp]';
+const APP_URL_RE = /^mchose-renderer:\/\/app\/.*\/index\.html/i;
+const STARTUP_URL_RE = /startup-loading\.html/i;
+const RENDERER_DIR = path.join(__dirname, 'renderer');
+const DATA_DIR = path.join(process.env.APPDATA || os.homedir(), 'MCHOSEHUB', 'wallpaper-hub');
+const STATE_FILE = path.join(DATA_DIR, 'state.json');
+const LOG_FILE = path.join(DATA_DIR, 'wallpaper-hub.log');
+const CMD_FILE = path.join(DATA_DIR, 'dev-cmd.json');
+const OUT_FILE = path.join(DATA_DIR, 'dev-out.json');
+const SHOT_FILE = path.join(DATA_DIR, 'shot.png');
+const TYPE_LABEL = { scene: '场景', video: '视频', web: '网页', application: '应用' };
+const VIDEO_EXT = ['.mp4', '.webm', '.mov', '.mkv'];
+
+function ensureDir(dir) {
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { /* ignore */ }
+}
+
+function log(level, message) {
+  try {
+    ensureDir(DATA_DIR);
+    try {
+      const st = fs.statSync(LOG_FILE);
+      if (st.size > 768 * 1024) fs.renameSync(LOG_FILE, LOG_FILE + '.1');
+    } catch (e) { /* ignore */ }
+    fs.appendFileSync(LOG_FILE, new Date().toISOString() + ' [' + level + '] ' + message + '\n');
+  } catch (e) { /* ignore */ }
+}
+
+function stripBom(text) {
+  return String(text).replace(/^\uFEFF/, '');
+}
+
+function readJson(file) {
+  try { return JSON.parse(stripBom(fs.readFileSync(file, 'utf8'))); }
+  catch (e) { return null; }
+}
+
+const DEFAULT_BEAUTIFY = {
+  blur: 0,
+  brightness: 100,
+  dim: 0,
+  saturation: 100,
+  scale: 100,
+  fit: 'cover',
+  posX: 50,
+  posY: 50,
+  motion: 'none',
+  speed: 1,
+  nativeBlur: 0,
+  nativeBrightness: 50
+};
+
+const DEFAULT_SPLASH = {
+  enabled: true,
+  bgMode: 'follow',          // follow=跟随壁纸 custom=指定壁纸 color=纯色 off=不铺背景
+  bgId: '',
+  bgColor: '#05070c',
+  bgBlur: 0,
+  bgBrightness: 100,
+  bgDim: 12,
+  bgSaturation: 100,
+  bgScale: 100,
+  theme: 'auto',             // auto | light | dark
+  glass: true,
+  glassOpacity: 55,
+  glassBlur: 18,
+  glassSaturate: 160,
+  glassBackdropBlur: 0,
+  speed: 1,
+  requireInteraction: true,
+  allowSkip: true,
+  startMaximized: false,     // 启动时把启动页与驱动主窗口直接最大化
+  sfx: true,
+  sfxVolume: 50,
+  voice: true,
+  voiceSource: 'asset',
+  voiceVolume: 90,
+  voiceRate: 0.9,
+  voicePitch: 0.9,
+  identityName: 'MCHOSE USER',
+  identityId: 'MCHOSE-01',
+  accessLevel: '03',
+  accent: '#1f63ff',
+  glitchA: '#ff3b30',
+  glitchB: '#2971b8'
+};
+
+const DEFAULT_HOTKEYS = {
+  next: 'Alt+Right',
+  prev: 'Alt+Left',
+  random: 'Alt+R',
+  toggle: 'Alt+P',
+  preview: ''
+};
+
+const state = {
+  items: [],
+  byId: new Map(),
+  bgId: '',
+  enabled: false,
+  beautify: Object.assign({}, DEFAULT_BEAUTIFY),
+  splash: Object.assign({}, DEFAULT_SPLASH),
+  hotkeys: Object.assign({}, DEFAULT_HOTKEYS),
+  hotkeyErrors: [],
+  error: null,
+  scannedAt: 0
+};
+
+(function restore() {
+  const saved = readJson(STATE_FILE);
+  if (!saved) return;
+  state.bgId = String(saved.bgId || saved.lastApplied || '');
+  state.enabled = !!saved.enabled && !!state.bgId;
+  if (saved.beautify && typeof saved.beautify === 'object') {
+    for (const key of Object.keys(DEFAULT_BEAUTIFY)) {
+      if (saved.beautify[key] !== undefined) state.beautify[key] = saved.beautify[key];
+    }
+  }
+  if (saved.splash && typeof saved.splash === 'object') {
+    for (const key of Object.keys(DEFAULT_SPLASH)) {
+      if (saved.splash[key] !== undefined) state.splash[key] = saved.splash[key];
+    }
+  }
+  if (saved.hotkeys && typeof saved.hotkeys === 'object') {
+    for (const key of Object.keys(DEFAULT_HOTKEYS)) {
+      if (typeof saved.hotkeys[key] === 'string') state.hotkeys[key] = saved.hotkeys[key];
+    }
+  }
+})();
+
+/* 关闭启动动画时应完全沿用官方启动页：既不挂载自定义动画，也不拦截官方窗口关闭。
+   这个标志供 pet-hub 的关闭保护读取。 */
+function splashAnimationOn() {
+  return !!(state && state.splash && state.splash.enabled !== false);
+}
+
+function syncSplashFlag() {
+  try { global.__mhubSplashAnimation = splashAnimationOn(); } catch (e) { /* ignore */ }
+}
+
+syncSplashFlag();
+
+function saveState() {
+  try {
+    ensureDir(DATA_DIR);
+    fs.writeFileSync(STATE_FILE, JSON.stringify({
+      bgId: state.bgId,
+      enabled: state.enabled,
+      beautify: state.beautify,
+      splash: state.splash,
+      hotkeys: state.hotkeys
+    }, null, 2));
+  } catch (e) { /* ignore */ }
+}
+
+// ---------- Wallpaper Engine 定位 ----------
+
+function steamPathFromRegistry() {
+  try {
+    const out = execFileSync('reg', ['query', 'HKCU\\Software\\Valve\\Steam', '/v', 'SteamPath'], {
+      encoding: 'utf8', windowsHide: true, timeout: 3000
+    });
+    const m = out.match(/SteamPath\s+REG_SZ\s+(.+)/i);
+    if (m && m[1]) return path.win32.normalize(m[1].trim().replace(/\//g, '\\'));
+  } catch (e) { /* ignore */ }
+  return '';
+}
+
+function steamLibraries() {
+  const roots = new Set();
+  const reg = steamPathFromRegistry();
+  if (reg) roots.add(reg);
+  const pf86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+  const pf = process.env.ProgramFiles || 'C:\\Program Files';
+  roots.add(path.join(pf86, 'Steam'));
+  roots.add(path.join(pf, 'Steam'));
+
+  const libs = new Set();
+  for (const root of roots) {
+    if (!fs.existsSync(root)) continue;
+    libs.add(root);
+    try {
+      const vdf = fs.readFileSync(path.join(root, 'steamapps', 'libraryfolders.vdf'), 'utf8');
+      const re = /"path"\s+"([^"]+)"/g;
+      let m;
+      while ((m = re.exec(vdf))) libs.add(path.win32.normalize(m[1].replace(/\\\\/g, '\\')));
+    } catch (e) { /* ignore */ }
+  }
+  return [...libs];
+}
+
+function detectEngine() {
+  for (const lib of steamLibraries()) {
+    const dir = path.join(lib, 'steamapps', 'common', 'wallpaper_engine');
+    for (const name of ['wallpaper64.exe', 'wallpaper32.exe']) {
+      const exe = path.join(dir, name);
+      if (fs.existsSync(exe)) return { dir, exe };
+    }
+  }
+  return null;
+}
+
+// ---------- 扫描壁纸 ----------
+
+function pickPreview(dir, declared) {
+  const names = [];
+  if (declared) names.push(String(declared));
+  names.push('preview.jpg', 'preview.gif', 'preview.png', 'preview.webp');
+  for (const name of names) {
+    try {
+      const file = path.join(dir, name);
+      if (fs.statSync(file).isFile()) return file;
+    } catch (e) { /* ignore */ }
+  }
+  return '';
+}
+
+function findVideo(dir, declared) {
+  const candidates = [];
+  if (declared) candidates.push(String(declared));
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      if (VIDEO_EXT.indexOf(path.extname(name).toLowerCase()) >= 0) candidates.push(name);
+    }
+  } catch (e) { /* ignore */ }
+  for (const name of candidates) {
+    if (VIDEO_EXT.indexOf(path.extname(name).toLowerCase()) < 0) continue;
+    try {
+      const file = path.join(dir, name);
+      if (fs.statSync(file).isFile()) return file;
+    } catch (e) { /* ignore */ }
+  }
+  return '';
+}
+
+function addProject(items, byId, dir, id) {
+  if (byId.has(id)) return;
+  const projectJson = path.join(dir, 'project.json');
+  let raw;
+  try { raw = fs.readFileSync(projectJson, 'utf8'); } catch (e) { return; }
+  let meta;
+  try { meta = JSON.parse(stripBom(raw)); } catch (e) { return; }
+  const preview = pickPreview(dir, meta.preview);
+  if (!preview) return;
+  const type = String(meta.type || '').toLowerCase();
+  const videoFile = findVideo(dir, meta.file);
+  const item = {
+    id: id,
+    title: String(meta.title || path.basename(dir)).trim().slice(0, 120),
+    type: type,
+    typeLabel: TYPE_LABEL[type] || '壁纸',
+    tags: Array.isArray(meta.tags) ? meta.tags.slice(0, 3).map(String) : [],
+    preview: SCHEME + '://img/preview/' + encodeURIComponent(id),
+    kind: videoFile ? 'video' : 'image',
+    adult: /questionable|mature/i.test(String(meta.contentrating || ''))
+  };
+  byId.set(id, { dir: dir, projectJson: projectJson, preview: preview, video: videoFile });
+  items.push(item);
+}
+
+function scanAll() {
+  const engine = detectEngine();
+  const items = [];
+  const byId = new Map();
+
+  if (engine) {
+    for (const lib of steamLibraries()) {
+      const wdir = path.join(lib, 'steamapps', 'workshop', 'content', '431960');
+      let dirs = [];
+      try { dirs = fs.readdirSync(wdir, { withFileTypes: true }); } catch (e) { continue; }
+      for (const d of dirs) {
+        if (!d.isDirectory()) continue;
+        addProject(items, byId, path.join(wdir, d.name), 'w:' + d.name);
+      }
+    }
+    for (const rel of [['projects', 'myprojects'], ['projects', 'defaultprojects']]) {
+      const base = path.join(engine.dir, rel[0], rel[1]);
+      let dirs = [];
+      try { dirs = fs.readdirSync(base, { withFileTypes: true }); } catch (e) { continue; }
+      for (const d of dirs) {
+        if (!d.isDirectory()) continue;
+        addProject(items, byId, path.join(base, d.name), 'l:' + d.name);
+      }
+    }
+  }
+
+  items.sort(function (a, b) {
+    return String(a.title).localeCompare(String(b.title), 'zh-Hans-CN');
+  });
+
+  state.items = items;
+  state.byId = byId;
+  state.error = engine ? null : { code: 'ENGINE_MISSING', message: '未检测到 Wallpaper Engine' };
+  state.scannedAt = Date.now();
+  if (state.bgId && !byId.has(state.bgId)) {
+    state.bgId = '';
+    state.enabled = false;
+    saveState();
+  }
+  log('info', 'scan: ' + items.length + ' items, engine=' + (engine ? engine.dir : '(none)') + ', bg=' + state.bgId);
+  return items.length;
+}
+
+// ---------- 预览图 / 背景图 ----------
+
+const thumbCache = new Map();
+
+function electron() {
+  try { return require('electron'); } catch (e) { return null; }
+}
+
+function imageDataUrl(file, width) {
+  const el = electron();
+  if (!el || !el.nativeImage) return '';
+  try {
+    let img = el.nativeImage.createFromPath(file);
+    if (img.isEmpty()) return '';
+    if (width > 0) {
+      const size = img.getSize();
+      if (size.width > width) img = img.resize({ width: width, quality: 'good' });
+    }
+    return img.toDataURL();
+  } catch (e) {
+    return '';
+  }
+}
+
+function thumbFor(id) {
+  const entry = state.byId.get(id);
+  if (!entry) return '';
+  if (thumbCache.has(id)) return thumbCache.get(id);
+  const url = imageDataUrl(entry.preview, 420);
+  thumbCache.set(id, url);
+  return url;
+}
+
+// ---------- 协议 ----------
+
+function fileType(ext) {
+  const map = {
+    '.gif': 'image/gif', '.png': 'image/png', '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg', '.webp': 'image/webp',
+    '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.mkv': 'video/x-matroska',
+    '.mp3': 'audio/mpeg', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+    '.html': 'text/html; charset=utf-8'
+  };
+  return map[String(ext || '').toLowerCase()] || 'application/octet-stream';
+}
+
+function readRange(file, rangeHeader, type) {
+  const stat = fs.statSync(file);
+  const total = stat.size;
+  const m = /bytes=(\d*)-(\d*)/i.exec(String(rangeHeader || ''));
+  if (!m) {
+    return {
+      status: 200,
+      headers: { 'Content-Type': type, 'Content-Length': String(total), 'Accept-Ranges': 'bytes' },
+      body: Readable.toWeb(fs.createReadStream(file))
+    };
+  }
+  let start = m[1] ? Number(m[1]) : 0;
+  let end = m[2] ? Number(m[2]) : total - 1;
+  if (!m[1] && m[2]) { start = Math.max(0, total - Number(m[2])); end = total - 1; }
+  if (start > end || start >= total) start = 0;
+  end = Math.min(end, total - 1);
+  const length = end - start + 1;
+  const fd = fs.openSync(file, 'r');
+  const buf = Buffer.alloc(length);
+  try { fs.readSync(fd, buf, 0, length, start); } finally { fs.closeSync(fd); }
+  return {
+    status: 206,
+    headers: {
+      'Content-Type': type,
+      'Content-Length': String(length),
+      'Content-Range': 'bytes ' + start + '-' + end + '/' + total,
+      'Accept-Ranges': 'bytes'
+    },
+    body: buf
+  };
+}
+
+function installProtocol(el) {
+  if (!el || !el.protocol || typeof el.protocol.handle !== 'function') return;
+  try { el.protocol.unhandle(SCHEME); } catch (e) { /* ignore */ }
+  el.protocol.handle(SCHEME, async function (request) {
+    try {
+      const url = new URL(request.url);
+      const host = url.hostname;
+      const rel = decodeURIComponent(url.pathname || '/').replace(/^\/+/, '');
+
+      if (host === 'img') {
+        const m = rel.match(/^(preview|thumb|full)\/(.+)$/);
+        if (!m) return new Response('', { status: 404 });
+        const id = decodeURIComponent(m[2]);
+        const entry = state.byId.get(id);
+        if (!entry) return new Response('', { status: 404 });
+        if (m[1] === 'thumb') {
+          const dataUrl = thumbFor(id);
+          if (!dataUrl) return new Response('', { status: 404 });
+          const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+          return new Response(Buffer.from(base64, 'base64'), {
+            headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' }
+          });
+        }
+        let data;
+        try { data = await fs.promises.readFile(entry.preview); } catch (e) { return new Response('', { status: 404 }); }
+        return new Response(data, {
+          headers: { 'Content-Type': fileType(path.extname(entry.preview)), 'Cache-Control': 'public, max-age=86400' }
+        });
+      }
+
+      if (host === 'media') {
+        const m = rel.match(/^video\/(.+)$/);
+        if (!m) return new Response('', { status: 404 });
+        const entry = state.byId.get(decodeURIComponent(m[1]));
+        if (!entry || !entry.video) return new Response('', { status: 404 });
+        const r = readRange(entry.video, request.headers.get('range'), fileType(path.extname(entry.video)));
+        return new Response(r.body, { status: r.status, headers: r.headers });
+      }
+
+      if (host === 'splash') {
+        /* 启动动画资源：asar 只按归档索引解析文件，新加的 splash.css / splash.js
+           不会被读取，所以改由插件自己的目录提供。 */
+        const base = path.join(__dirname, 'splash');
+        const file = path.resolve(base, rel);
+        if (file.indexOf(base) !== 0) return new Response('', { status: 403 });
+        try {
+          const st = fs.statSync(file);
+          if (!st.isFile()) return new Response('', { status: 404 });
+        } catch (e) {
+          return new Response('', { status: 404 });
+        }
+        const r = readRange(file, request.headers.get('range'), fileType(path.extname(file)));
+        const headers = Object.assign({ 'Cache-Control': 'no-store' }, r.headers);
+        return new Response(r.body, { status: r.status, headers: headers });
+      }
+
+      if (host === 'ui') {
+        /* 裁剪预览小窗页面：走自定义协议，避免 data: 页面拿不到 mchose-wallpaper:// 资源 */
+        if (rel === 'crop-preview') {
+          return new Response(cropHtml(), {
+            headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
+          });
+        }
+        return new Response('', { status: 404 });
+      }
+
+      return new Response('', { status: 404 });
+    } catch (e) {
+      log('warn', 'protocol error: ' + (e && e.message));
+      return new Response('', { status: 500 });
+    }
+  });
+}
+
+// ---------- 状态与下行 ----------
+
+function snapshot() {
+  return {
+    v: 2,
+    items: state.items,
+    bgId: state.bgId,
+    enabled: state.enabled,
+    beautify: state.beautify,
+    splash: state.splash,
+    hotkeys: state.hotkeys,
+    hotkeyErrors: state.hotkeyErrors,
+    error: state.error,
+    at: state.scannedAt
+  };
+}
+
+const LS = String.fromCharCode(0x2028);
+const PS = String.fromCharCode(0x2029);
+
+function toJs(value) {
+  return JSON.stringify(value).replace(/[\u2028\u2029]/g, function (ch) {
+    return ch === LS ? '\\u2028' : '\\u2029';
+  });
+}
+
+function runIn(wc, code) {
+  try {
+    const p = wc.executeJavaScript(code, false);
+    if (p && typeof p.catch === 'function') p.catch(function () { /* ignore */ });
+  } catch (e) { /* ignore */ }
+}
+
+function targetWebContents() {
+  const el = electron();
+  if (!el) return [];
+  try { return el.webContents.getAllWebContents().filter(isTarget); } catch (e) { return []; }
+}
+
+function pushState(target) {
+  const code = 'window.__mhubWpReceive&&window.__mhubWpReceive(' + toJs(snapshot()) + ')';
+  const list = target ? [target] : targetWebContents();
+  if (!list.length) log('warn', 'pushState: no targets');
+  for (const wc of list) {
+    try {
+      const p = wc.executeJavaScript(code, false);
+      if (p && typeof p.then === 'function') p.catch(function (e) { log('warn', 'pushState failed: ' + (e && e.message)); });
+    } catch (e) {
+      log('warn', 'pushState threw: ' + (e && e.message));
+    }
+  }
+}
+
+function backgroundMedia() {
+  const entry = state.byId.get(state.bgId);
+  if (!entry) return null;
+  return {
+    id: state.bgId,
+    kind: entry.video ? 'video' : 'image',
+    image: SCHEME + '://img/full/' + encodeURIComponent(state.bgId),
+    video: entry.video ? (SCHEME + '://media/video/' + encodeURIComponent(state.bgId)) : ''
+  };
+}
+
+// ---------- 裁剪预览小窗 ----------
+
+let cropWin = null;
+
+function cropPayload() {
+  const b = state.beautify;
+  const posX = Math.min(100, Math.max(0, Number(b.posX === undefined ? 50 : b.posX) || 0));
+  const posY = Math.min(100, Math.max(0, Number(b.posY === undefined ? 50 : b.posY) || 0));
+  const fit = b.fit === 'tile' ? 'cover' : (b.fit || 'cover');
+  const parts = [];
+  if (Number(b.blur) > 0) parts.push('blur(' + Number(b.blur) + 'px)');
+  if (Number(b.brightness) !== 100) parts.push('brightness(' + Number(b.brightness) + '%)');
+  if (Number(b.saturation) !== 100) parts.push('saturate(' + Number(b.saturation) + '%)');
+  return {
+    media: backgroundMedia(),
+    fit: fit,
+    posX: posX,
+    posY: posY,
+    scale: Math.min(160, Math.max(100, Number(b.scale) || 100)) / 100,
+    filter: parts.join(' '),
+    dim: Math.min(90, Math.max(0, Number(b.dim) || 0)) / 100,
+    accent: /^#[0-9a-f]{6}$/i.test(String(state.accent || '')) ? state.accent : '#1f63ff'
+  };
+}
+
+function pushCropPreview() {
+  if (!cropWin || cropWin.isDestroyed()) return;
+  runIn(cropWin.webContents, 'window.__mhubWpPreview&&window.__mhubWpPreview(' + toJs(cropPayload()) + ')');
+}
+
+function cropHtml() {
+  return '<!doctype html><html><head><meta charset="utf-8"><style>' +
+    'html,body{margin:0;height:100%;background:transparent;overflow:hidden;' +
+    'font-family:"Microsoft YaHei UI","Segoe UI",sans-serif;-webkit-user-select:none;cursor:default}' +
+    '.win{position:absolute;inset:0;border-radius:12px;overflow:hidden;background:rgba(10,14,22,.94);' +
+    'border:1px solid rgba(255,255,255,.14);box-shadow:0 18px 48px rgba(0,0,0,.55)}' +
+    '.bar{height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;' +
+    'background:linear-gradient(180deg,rgba(255,255,255,.09),rgba(255,255,255,.02));' +
+    '-webkit-app-region:drag;color:#dce5f5;font-size:12px}' +
+    '.dot{width:7px;height:7px;border-radius:50%;background:#1f63ff;box-shadow:0 0 8px #1f63ff;flex:none}' +
+    '.ttl{font-weight:600;letter-spacing:.4px}' +
+    '.hint{margin-left:auto;font-size:11px;opacity:.42;white-space:nowrap}' +
+    '.x{-webkit-app-region:no-drag;width:22px;height:20px;border:0;border-radius:6px;' +
+    'background:rgba(255,255,255,.08);color:#c8d3e6;font-size:14px;line-height:1;cursor:pointer;' +
+    'display:flex;align-items:center;justify-content:center;padding:0}' +
+    '.x:hover{background:rgba(255,78,78,.38);color:#fff}' +
+    '.stage{position:absolute;left:0;right:0;top:32px;bottom:0;overflow:hidden;cursor:grab}' +
+    '.stage.grabbing{cursor:grabbing}' +
+    '#node{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 50%;' +
+    'transform-origin:center;pointer-events:none}' +
+    '#dim{position:absolute;left:0;right:0;top:32px;bottom:0;background:#000;opacity:0;pointer-events:none}' +
+    '.foot{position:absolute;left:0;right:0;bottom:0;height:26px;display:flex;align-items:center;' +
+    'justify-content:center;font-size:11px;color:#e8eefb;letter-spacing:.4px;pointer-events:none;' +
+    'background:linear-gradient(0deg,rgba(0,0,0,.55),rgba(0,0,0,0))}' +
+    '</style></head><body><div class="win">' +
+    '<div class="bar"><span class="dot"></span><span class="ttl">裁剪预览</span>' +
+    '<span class="hint">拖动画面调整位置 · 滚轮缩放 · Esc 关闭</span>' +
+    '<button class="x" id="close">×</button></div>' +
+    '<div class="stage" id="stage"><img id="node" alt=""></div><div id="dim"></div>' +
+    '<div class="foot" id="foot"></div></div>' +
+    '<script>(function(){' +
+    'var node=document.getElementById("node"),dim=document.getElementById("dim"),stage=document.getElementById("stage"),' +
+    'foot=document.getElementById("foot"),dot=document.querySelector(".dot");' +
+    'var st={posX:50,posY:50,zoom:100},drag=null,sendTimer=0,videoMode=false;' +
+    'function clamp(v,a,b){return Math.min(b,Math.max(a,v));}' +
+    'function paint(){}' +
+    'function footText(){return "位置 "+Math.round(st.posX)+"% / "+Math.round(st.posY)+"%  ·  缩放 "+Math.round(st.zoom)+"%";}' +
+    'function apply(){if(!node)return;node.style.objectPosition=st.posX+"% "+st.posY+"%";' +
+    'node.style.transform="scale("+(st.zoom/100)+")";foot.textContent=footText();}' +
+    'function send(){var code=JSON.stringify({t:"beautify",payload:{posX:Math.round(st.posX),posY:Math.round(st.posY),scale:Math.round(st.zoom)}});' +
+    'console.log("[mhub-wp]"+code);}' +
+    'function sendSoon(){if(sendTimer)return;sendTimer=setTimeout(function(){sendTimer=0;send();},70);}' +
+    'window.__mhubWpPreview=function(m){try{' +
+    'if(!m||!m.media)return;' +
+    'if(m.accent){dot.style.background=m.accent;dot.style.boxShadow="0 0 8px "+m.accent;}' +
+    'var isVideo=m.media.kind==="video";' +
+    'if(videoMode!==isVideo){var e=document.createElement(isVideo?"video":"img");e.id="node";' +
+    'if(isVideo){e.muted=true;e.loop=true;e.autoplay=true;e.playsInline=true;}' +
+    'node.parentNode.replaceChild(e,node);node=e;videoMode=isVideo;}' +
+    'var src=isVideo?m.media.video:m.media.image;' +
+    'if(node.getAttribute("src")!==src){node.src=src;if(isVideo)node.play().catch(function(){});}' +
+    'node.style.objectFit=m.fit;node.style.filter=m.filter||"none";dim.style.opacity=String(m.dim||0);' +
+    'if(!drag){st.posX=m.posX;st.posY=m.posY;st.zoom=Math.round((m.scale||1)*100);}' +
+    'apply();}catch(err){}};' +
+    'stage.addEventListener("pointerdown",function(ev){' +
+    'drag={x:ev.clientX,y:ev.clientY,px:st.posX,py:st.posY,w:stage.clientWidth,h:stage.clientHeight};' +
+    'stage.classList.add("grabbing");stage.setPointerCapture(ev.pointerId);});' +
+    'stage.addEventListener("pointermove",function(ev){if(!drag)return;' +
+    'st.posX=clamp(drag.px-(ev.clientX-drag.x)/drag.w*100,0,100);' +
+    'st.posY=clamp(drag.py-(ev.clientY-drag.y)/drag.h*100,0,100);' +
+    'apply();sendSoon();});' +
+    'function endDrag(ev){if(!drag)return;drag=null;stage.classList.remove("grabbing");try{stage.releasePointerCapture(ev.pointerId);}catch(e){}send();}' +
+    'stage.addEventListener("pointerup",endDrag);stage.addEventListener("pointercancel",endDrag);' +
+    'stage.addEventListener("wheel",function(ev){ev.preventDefault();' +
+    'st.zoom=clamp(st.zoom+(ev.deltaY<0?4:-4),100,160);apply();sendSoon();},{passive:false});' +
+    'document.getElementById("close").addEventListener("click",function(){window.close();});' +
+    'document.addEventListener("keydown",function(ev){if(ev.key==="Escape")window.close();});' +
+    '})();</script></body></html>';
+}
+
+function openCropWindow() {
+  const el = electron();
+  if (!el || !el.BrowserWindow) return;
+  if (cropWin && !cropWin.isDestroyed()) { cropWin.show(); cropWin.focus(); pushCropPreview(); return; }
+  let x;
+  let y;
+  try {
+    const main = mainBrowserWindow();
+    if (main && !main.isDestroyed()) {
+      const b = main.getBounds();
+      x = Math.round(b.x + b.width - 600 - 36);
+      y = Math.round(b.y + b.height - 400 - 52);
+    }
+  } catch (e) { /* ignore */ }
+  cropWin = new el.BrowserWindow({
+    width: 600,
+    height: 400,
+    x: x,
+    y: y,
+    frame: false,
+    resizable: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: true,
+    title: '裁剪预览',
+    webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false }
+  });
+  cropWin.loadURL(SCHEME + '://ui/crop-preview');
+  cropWin.webContents.on('did-finish-load', function () { pushCropPreview(); });
+  cropWin.webContents.on('console-message', function () {
+    const args = Array.prototype.slice.call(arguments);
+    let text = null;
+    if (typeof args[2] === 'string') text = args[2];
+    else if (args[0] && typeof args[0].message === 'string') text = args[0].message;
+    else if (typeof args[1] === 'string') text = args[1];
+    if (!text || text.indexOf(PREFIX) !== 0) return;
+    handleUplink(text.slice(PREFIX.length), cropWin && cropWin.webContents);
+  });
+  cropWin.on('closed', function () { cropWin = null; });
+}
+
+function closeCropWindow() {
+  if (cropWin && !cropWin.isDestroyed()) cropWin.close();
+  cropWin = null;
+}
+
+function pushBackground(target) {
+  const media = backgroundMedia();
+  const code = 'window.__mhubWpMedia&&window.__mhubWpMedia(' + toJs(media) + ')';
+  const list = target ? [target] : targetWebContents();
+  for (const wc of list) runIn(wc, code);
+}
+
+function pushThumb(target, id) {
+  const code = 'window.__mhubWpThumb&&window.__mhubWpThumb(' + toJs(id) + ',' + toJs(thumbFor(id)) + ')';
+  const list = target ? [target] : targetWebContents();
+  for (const wc of list) runIn(wc, code);
+}
+
+// ---------- 启动页背景同步 ----------
+
+let startupCache = { id: '', url: '' };
+
+function isStartup(wc) {
+  try {
+    return STARTUP_URL_RE.test(wc.getURL() || '');
+  } catch (e) {
+    return false;
+  }
+}
+
+function pushSplashConfig(wc) {
+  const list = wc ? [wc] : startupTargets();
+  if (!list.length) return;
+  const code = '(function(){try{' +
+    'window.__MHUBSplashConfig=' + toJs(state.splash) + ';' +
+    'if(window.__MHUBApplySplashConfig)window.__MHUBApplySplashConfig(window.__MHUBSplashConfig);' +
+    'return "ok";}catch(e){return "err:"+e.message;}})()';
+  for (const target of list) runIn(target, code);
+}
+
+function startupTargets() {
+  const el = electron();
+  if (!el) return [];
+  try { return el.webContents.getAllWebContents().filter(isStartup); } catch (e) { return []; }
+}
+
+/* 启动页背景优先走自定义协议（mchose-wallpaper://img/preview/<id>），
+   避免把整张大图转成 base64 data URL 塞进 executeJavaScript 导致
+   "Array buffer allocation failed" 或注入失败。协议由 installProtocol 注册，
+   所有窗口（含真实启动页与预览窗口）均可访问。 */
+function startupBgUrl(id) {
+  const entry = state.byId.get(id);
+  if (!entry) return '';
+  return SCHEME + '://img/preview/' + encodeURIComponent(id);
+}
+
+function splashBg() {
+  const s = state.splash;
+  if (!s.enabled || s.bgMode === 'off') return null;
+  if (s.bgMode === 'color') return { kind: 'color', color: String(s.bgColor || '#05070c') };
+  const id = s.bgMode === 'custom' ? String(s.bgId || '') : state.bgId;
+  if (!id) return null;
+  const entry = state.byId.get(id);
+  if (!entry) return null;
+  /* 视频壁纸优先用视频本身：preview 一般是 1024px 以下的小图，
+     放到全屏启动页里放大后会明显发糊；视频是原始分辨率，清晰得多。 */
+  if (entry.video) {
+    return {
+      kind: 'video',
+      id: id,
+      url: SCHEME + '://media/video/' + encodeURIComponent(id),
+      poster: startupBgUrl(id)
+    };
+  }
+  const url = startupBgUrl(id);
+  if (!url) return null;
+  return { kind: 'image', id: id, url: url };
+}
+
+/* ---------- 启动动画：挂载到官方启动页 ----------
+   asar 只按归档索引解析，往 app.asar.unpacked 里新增 splash.css / splash.js 不会被读取，
+   而 startup-loading.html 还会按归档记录的尺寸被截断。因此保留官方启动页作为宿主窗口，
+   由插件在 dom-ready 时替换页面内容并注入自己的动画运行时和样式。 */
+const SPLASH_DIR = path.join(__dirname, 'splash');
+let splashRuntime = null;
+
+function buildSplashRuntime() {
+  if (splashRuntime) return splashRuntime;
+  function read(name) { return fs.readFileSync(path.join(SPLASH_DIR, name), 'utf8'); }
+  const html = read('startup-loading.html');
+  const m = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  splashRuntime = {
+    markup: m ? m[1] : '',
+    css: read('splash.css'),
+    js: read('splash.js'),
+    assetBase: SCHEME + '://splash/startup-assets/'
+  };
+  return splashRuntime;
+}
+
+function mountSplash(wc) {
+  /* 关闭启动动画时保留官方启动页，不替换内容。 */
+  if (!splashAnimationOn()) return;
+  let rt;
+  try {
+    rt = buildSplashRuntime();
+  } catch (e) {
+    /* 运行时缺失时不能继续拦截关闭，否则透明/残页窗口会长期盖住主界面。 */
+    try { global.__mhubSplashFailed = true; } catch (_) {}
+    log('error', 'splash runtime missing: ' + (e && e.message));
+    return;
+  }
+  try { wc.insertCSS(rt.css); } catch (e) { /* ignore */ }
+  const code = '(function(){try{' +
+    'if(window.__MHUB_SPLASH_MOUNTED)return "mounted";' +
+    'window.__MHUB_SPLASH_MOUNTED=1;' +
+    'window.__MHUB_SPLASH_ASSETS=' + toJs(rt.assetBase) + ';' +
+    'if(!document.body)return "no body";' +
+    'document.body.innerHTML=' + toJs(rt.markup) + ';' +
+    'return "ok";}catch(e){return "err:"+e.message;}})()';
+  const p = wc.executeJavaScript(code, false).then(function (r) {
+    return wc.executeJavaScript(rt.js, false).then(function () {
+      try { global.__mhubSplashFailed = false; } catch (e) {}
+      log('info', 'splash mounted wc=' + wc.id + ' (' + r + ')');
+    });
+  });
+  if (p && typeof p.catch === 'function') {
+    p.catch(function (e) {
+      try { global.__mhubSplashFailed = true; } catch (_) {}
+      log('warn', 'splash mount failed: ' + (e && e.message));
+    });
+  }
+}
+
+function injectStartup(wc, force) {
+  if (!isStartup(wc)) return;
+  const s = state.splash;
+  /* 关闭启动动画：官方启动页原样播放，不注入配置/背景，也不提前关闭。 */
+  if (!s.enabled) return;
+  const cfgSig = JSON.stringify(s);
+  if (force || wc.__mhubSplashCfgSig !== cfgSig) {
+    wc.__mhubSplashCfgSig = cfgSig;
+    pushSplashConfig(wc);
+  }
+
+  const bg = splashBg();
+  const blur = Math.max(0, Math.min(60, Number(s.bgBlur) || 0));
+  const bright = Math.max(20, Math.min(300, Number(s.bgBrightness) || 100));
+  const sat = Math.max(0, Math.min(220, Number(s.bgSaturation) || 100));
+  const dim = Math.max(0, Math.min(90, Number(s.bgDim) || 0)) / 100;
+  const scale = Math.max(1, Math.min(1.6, (Number(s.bgScale) || 100) / 100));
+  const sig = JSON.stringify({ bg: bg, blur: blur, bright: bright, sat: sat, dim: dim, scale: scale, glass: !!s.glass, color: s.bgColor });
+  if (!force && wc.__mhubStartupSig === sig) return;
+  wc.__mhubStartupSig = sig;
+
+  const filter = [];
+  if (blur > 0) filter.push('blur(' + blur + 'px)');
+  if (Math.round(bright) !== 100) filter.push('brightness(' + Math.round(bright) + '%)');
+  if (Math.round(sat) !== 100) filter.push('saturate(' + Math.round(sat) + '%)');
+  const imgStyle = 'width:100%;height:100%;display:block;object-fit:cover;' + (filter.length ? 'filter:' + filter.join(' ') + ';' : '');
+  const mediaStyle = 'position:absolute;inset:0;transform:scale(' + scale + ');transform-origin:center;will-change:transform;';
+  const bgCode = bg
+    ? (bg.kind === 'color'
+      ? '{kind:"color",color:' + toJs(bg.color) + '}'
+      : (bg.kind === 'video'
+        ? '{kind:"video",url:' + toJs(bg.url) + ',poster:' + toJs(bg.poster) + '}'
+        : '{kind:"image",url:' + toJs(bg.url) + '}'))
+    : 'null';
+
+  const code = '(function(){try{' +
+    'var id="mhub-startup-bg";' +
+    'var old=document.getElementById(id);if(old&&old.parentNode)old.parentNode.removeChild(old);' +
+    'var host=document.getElementById("startup-root")||document.body;if(!host)return "no host";' +
+    /* 场景壁纸只有 ~1024px 预览图，放大后用 3×3 卷积锐化找回一些细节 */
+    'if(!document.getElementById("mhub-startup-sharpen")){' +
+    'var sw=document.createElement("div");sw.id="mhub-startup-sharpen";' +
+    'sw.style.cssText="position:absolute;width:0;height:0;overflow:hidden;pointer-events:none;";' +
+    'sw.innerHTML=' + toJs('<svg width="0" height="0" aria-hidden="true"><filter id="mhubWpSharpen" color-interpolation-filters="sRGB"><feConvolveMatrix order="3" preserveAlpha="true" edgeMode="duplicate" kernelMatrix="0 -0.3 0 -0.3 2.2 -0.3 0 -0.3 0" /></filter></svg>') + ';' +
+    'document.body.appendChild(sw);}' +
+    'var bg=' + bgCode + ';' +
+    'if(bg){' +
+    'var d=document.createElement("div");d.id=id;' +
+    'd.style.cssText="position:absolute;inset:0;z-index:0;overflow:hidden;pointer-events:none;";' +
+    'if(bg.kind==="color"){d.style.background=bg.color;}' +
+    'else{' +
+    'var media=document.createElement("div");media.style.cssText=' + toJs(mediaStyle) + ';' +
+    'if(bg.kind==="video"){' +
+    'var v=document.createElement("video");v.src=bg.url;v.poster=bg.poster||"";v.muted=true;v.loop=true;v.autoplay=true;v.defaultMuted=true;v.setAttribute("muted","");v.setAttribute("playsinline","");v.setAttribute("disablepictureinpicture","");v.style.cssText=' + toJs(imgStyle) + ';' +
+    'var tp=function(){try{var p=v.play();if(p&&p.catch)p.catch(function(){});}catch(e){}};' +
+    'v.addEventListener("loadeddata",tp);v.addEventListener("canplay",tp);tp();' +
+    'media.appendChild(v);}' +
+    'else{' +
+    'var img=document.createElement("img");img.alt="";img.src=bg.url;img.decoding="async";img.style.cssText=' + toJs(imgStyle + 'filter:url(#mhubWpSharpen);') + ';' +
+    'media.appendChild(img);}' +
+    'd.appendChild(media);}' +
+    'var t=document.createElement("div");t.style.cssText="position:absolute;inset:0;background:#000;opacity:' + dim + ';";d.appendChild(t);' +
+    'host.insertBefore(d,host.firstChild);}' +
+    'var st=document.getElementById("mhub-startup-style");' +
+    'if(!st){st=document.createElement("style");st.id="mhub-startup-style";document.head.appendChild(st);}' +
+    'st.textContent="body{background:" + ' + toJs(String(s.bgColor || '#05070c')) + ' + " !important;}" + (' + (s.glass ? '""' : '".dsu-plate{background:transparent !important;}"') + ');' +
+    'return "ok";}catch(e){return "err:"+e.message;}})()';
+  try {
+    const p = wc.executeJavaScript(code, false);
+    if (p && typeof p.then === 'function') {
+      p.then(function (r) {
+        log('info', 'startup bg ' + r);
+      }, function (e) {
+        log('warn', 'startup inject: ' + (e && e.message));
+      });
+    }
+  } catch (e) {
+    log('warn', 'startup inject threw: ' + (e && e.message));
+  }
+}
+
+// ---------- 操作 ----------
+
+function setBackground(id) {
+  const entry = state.byId.get(id);
+  if (!entry) { log('warn', 'set: unknown id ' + id); return; }
+  state.bgId = id;
+  state.enabled = true;
+  saveState();
+  log('info', 'set background ' + id + ' (' + (entry.video ? 'video' : 'image') + ')');
+  pushBackground();
+  pushState();
+  pushCropPreview();
+  for (const wc of startupTargets()) injectStartup(wc, true);
+}
+
+function resetBackground() {
+  state.bgId = '';
+  state.enabled = false;
+  saveState();
+  log('info', 'reset background');
+  pushBackground();
+  pushState();
+  for (const wc of startupTargets()) injectStartup(wc, true);
+}
+
+function updateBeautify(patch) {
+  if (!patch || typeof patch !== 'object') return;
+  const b = state.beautify;
+  const nums = { blur: [0, 60], brightness: [20, 180], dim: [0, 90], saturation: [0, 220], scale: [100, 160], speed: [0.3, 3], nativeBlur: [0, 50], nativeBrightness: [0, 100], posX: [0, 100], posY: [0, 100] };
+  for (const key of Object.keys(nums)) {
+    if (patch[key] === undefined) continue;
+    const n = Number(patch[key]);
+    if (!isFinite(n)) continue;
+    b[key] = Math.min(nums[key][1], Math.max(nums[key][0], n));
+  }
+  if (patch.fit !== undefined && /^(cover|contain|fill|tile)$/.test(patch.fit)) b.fit = patch.fit;
+  if (patch.motion !== undefined && /^(none|kenburns|parallax|breathe)$/.test(patch.motion)) b.motion = patch.motion;
+  if (patch.enabled !== undefined) state.enabled = !!patch.enabled && !!state.bgId;
+  saveState();
+  pushState();
+  pushCropPreview();
+}
+
+function updateSplash(patch) {
+  if (!patch || typeof patch !== 'object') return;
+  const s = state.splash;
+  const nums = {
+    bgBlur: [0, 60], bgBrightness: [20, 180], bgDim: [0, 90], bgSaturation: [0, 220], bgScale: [100, 160],
+    glassOpacity: [15, 95], glassBlur: [0, 60], glassSaturate: [100, 200], glassBackdropBlur: [0, 80],
+    speed: [0.35, 3], sfxVolume: [0, 100], voiceVolume: [0, 100], voiceRate: [0.5, 1.5], voicePitch: [0.5, 1.5]
+  };
+  for (const key of Object.keys(nums)) {
+    if (patch[key] === undefined) continue;
+    const n = Number(patch[key]);
+    if (!isFinite(n)) continue;
+    s[key] = Math.min(nums[key][1], Math.max(nums[key][0], n));
+  }
+  const bools = ['enabled', 'glass', 'requireInteraction', 'allowSkip', 'startMaximized', 'sfx', 'voice'];
+  for (const key of bools) {
+    if (patch[key] !== undefined) s[key] = !!patch[key];
+  }
+  if (patch.bgMode !== undefined && /^(follow|custom|color|off)$/.test(patch.bgMode)) s.bgMode = patch.bgMode;
+  if (patch.theme !== undefined && /^(auto|light|dark)$/.test(patch.theme)) s.theme = patch.theme;
+  if (patch.voiceSource !== undefined) s.voiceSource = patch.voiceSource === 'tts' ? 'tts' : 'asset';
+  for (const key of ['bgColor', 'accent', 'glitchA', 'glitchB']) {
+    if (patch[key] !== undefined && /^#[0-9a-f]{6}$/i.test(String(patch[key]))) s[key] = String(patch[key]);
+  }
+  for (const key of ['bgId', 'identityName', 'identityId', 'accessLevel']) {
+    if (patch[key] !== undefined) s[key] = String(patch[key]).slice(0, 64);
+  }
+  saveState();
+  syncSplashFlag();
+  const targets = startupTargets();
+  for (const wc of targets) injectStartup(wc, true);
+  pushState();
+  log('info', 'splash updated: enabled=' + s.enabled + ' bg=' + s.bgMode + ' glass=' + s.glass + ' speed=' + s.speed);
+}
+
+let previewWin = null;
+
+function previewSplash() {
+  const el = electron();
+  if (!el || !el.BrowserWindow) return 'no electron';
+  try {
+    if (previewWin && !previewWin.isDestroyed()) {
+      previewWin.show();
+      previewWin.focus();
+      return 'focused';
+    }
+  } catch (e) { /* ignore */ }
+  const html = path.join(process.resourcesPath || path.join(__dirname, '..', '..'), 'app.asar.unpacked', 'bundled', 'renderer', 'startup-loading.html');
+  try {
+    if (!fs.existsSync(html)) return 'no splash html';
+    const theme = state.splash.theme === 'light' ? 'light' : 'dark';
+    const win = new el.BrowserWindow({
+      width: 1180,
+      height: 740,
+      frame: false,
+      transparent: true,
+      backgroundColor: '#00000000',
+      hasShadow: true,
+      resizable: false,
+      show: true,
+      title: 'M HUB Startup Preview',
+      webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: false }
+    });
+    previewWin = win;
+    win.loadFile(html, { query: { theme: theme } });
+    win.once('ready-to-show', function () { try { win.show(); win.focus(); } catch (e) { /* ignore */ } });
+    win.on('closed', function () { if (previewWin === win) previewWin = null; });
+
+    /* 预览窗口在终幕欢迎语结束后自动淡出关闭，避免一直挡在界面上 */
+    const watch = setInterval(function () {
+      if (win.isDestroyed()) { clearInterval(watch); return; }
+      win.webContents.executeJavaScript('!!(window.__MHUBSplash && window.__MHUBSplash.welcomeDone)').then(function (done) {
+        if (!done) return;
+        clearInterval(watch);
+        setTimeout(function () {
+          if (!win.isDestroyed()) runIn(win.webContents, 'window.dismissStartup && window.dismissStartup(600)');
+        }, 1600);
+      }).catch(function () { /* ignore */ });
+    }, 800);
+    return 'preview';
+  } catch (e) {
+    log('warn', 'preview failed: ' + (e && e.message));
+    return 'preview error: ' + (e && e.message);
+  }
+}
+
+// ---------- 注入 ----------
+
+let payloadCode = '';
+let payloadHash = '';
+let payloadAt = 0;
+
+function buildPayload() {
+  try {
+    let file = path.join(RENDERER_DIR, 'shell.js');
+    const override = path.join(DATA_DIR, 'shell.js');
+    try {
+      if (fs.statSync(override).isFile()) file = override;
+    } catch (e) { /* ignore */ }
+    const st = fs.statSync(file);
+    if (payloadCode && payloadAt === st.mtimeMs) return { code: payloadCode, hash: payloadHash };
+    const code = fs.readFileSync(file, 'utf8');
+    payloadHash = crypto.createHash('sha1').update(code).digest('hex').slice(0, 12);
+    payloadCode = '(function(){try{\n' + code + '\n}catch(e){try{console.dir("[mhub-wp]"+JSON.stringify({t:"error",where:"shell",message:String(e&&e.message)}))}catch(_){}}})();';
+    payloadAt = st.mtimeMs;
+    return { code: payloadCode, hash: payloadHash };
+  } catch (e) {
+    log('error', 'shell.js missing: ' + (e && e.message));
+    return null;
+  }
+}
+
+const attached = new Set();
+const injectedHash = new Map();
+
+function isTarget(wc) {
+  try {
+    if (!wc || (typeof wc.isDestroyed === 'function' && wc.isDestroyed())) return false;
+    return APP_URL_RE.test(wc.getURL() || '');
+  } catch (e) { return false; }
+}
+
+function inject(wc) {
+  const payload = buildPayload();
+  if (!payload || !isTarget(wc)) return;
+  try {
+    const p = wc.executeJavaScript(payload.code, false);
+    if (p && typeof p.then === 'function') {
+      p.then(function () {
+        injectedHash.set(wc.id, payload.hash);
+        log('info', 'injected wc=' + wc.id + ' hash=' + payload.hash);
+        pushState(wc);
+        if (state.bgId) pushBackground(wc);
+        pushThumb(wc, state.bgId || (state.items[0] && state.items[0].id) || '');
+      }, function (err) {
+        log('warn', 'inject failed wc=' + wc.id + ': ' + (err && err.message));
+      });
+    }
+  } catch (e) {
+    log('warn', 'inject threw: ' + (e && e.message));
+  }
+}
+
+let splashMaxPending = false;
+
+function mainBrowserWindow() {
+  const el = electron();
+  if (!el || !el.BrowserWindow) return null;
+  for (const wc of targetWebContents()) {
+    try {
+      const win = el.BrowserWindow.fromWebContents(wc);
+      if (win && !win.isDestroyed()) return win;
+    } catch (e) { /* ignore */ }
+  }
+  return null;
+}
+
+function maximizeMainWindow() {
+  const main = mainBrowserWindow();
+  if (!main) return false;
+  try {
+    if (!main.isMaximized()) main.maximize();
+    return true;
+  } catch (e) { return false; }
+}
+
+function restoreMainWindow() {
+  const main = mainBrowserWindow();
+  if (!main) return;
+  try { if (main.isMaximized()) main.unmaximize(); } catch (e) { /* ignore */ }
+}
+
+/* 启动默认最大化：真实启动页窗口自动铺满工作区，并一起最大化驱动主窗口。
+   预览窗口（previewSplash 创建）不参与，避免预览也被放大。 */
+function autoMaximizeStartup(wc) {
+  if (!state.splash.startMaximized) return;
+  if (wc.__mhubAutoMaxed) return;
+  wc.__mhubAutoMaxed = true;
+  setTimeout(function () {
+    try {
+      if (isStartup(wc)) splashWindowAction(wc, 'maximize');
+    } catch (e) { /* ignore */ }
+  }, 160);
+}
+
+function splashWindowAction(wc, action) {
+  const el = electron();
+  if (!el || !el.BrowserWindow) return 'no electron';
+  let win = null;
+  try { win = el.BrowserWindow.fromWebContents(wc); } catch (e) { return 'err:' + e.message; }
+  if (!win || win.isDestroyed()) return 'no window';
+  try {
+    if (action === 'minimize') win.minimize();
+    else if (action === 'maximize') {
+      /* 驱动主窗口一起最大化；若主窗口还没创建，标记待补 */
+      splashMaxPending = !maximizeMainWindow();
+      /* 用工作区尺寸模拟最大化：固定尺寸窗口也能放大，还原时一定能回到原位置 */
+      if (win.__mhubWinBounds) return 'already';
+      const before = win.getBounds();
+      win.__mhubWinBounds = before;
+      win.__mhubWinResizable = win.isResizable();
+      if (win.isMaximized()) win.unmaximize();
+      if (!win.isResizable()) win.setResizable(true);
+      let area = null;
+      try { area = el.screen.getDisplayMatching(before).workArea; } catch (e) { area = null; }
+      if (area) win.setBounds({ x: area.x, y: area.y, width: area.width, height: area.height });
+      else win.maximize();
+    }
+    else if (action === 'unmaximize') {
+      splashMaxPending = false;
+      restoreMainWindow();
+      const back = win.__mhubWinBounds;
+      win.__mhubWinBounds = null;
+      if (win.isFullScreen && win.isFullScreen()) win.setFullScreen(false);
+      if (win.isMaximized()) win.unmaximize();
+      if (back) {
+        if (!win.isResizable()) win.setResizable(true);
+        win.setBounds(back);
+      }
+      if (win.__mhubWinResizable === false) win.setResizable(false);
+      win.__mhubWinResizable = null;
+    }
+    else if (action === 'close') win.close();
+    else return 'bad action';
+    log('info', 'splash window ' + action + ' wc=' + wc.id);
+    return 'ok';
+  } catch (e) {
+    return 'err:' + e.message;
+  }
+}
+
+function handleUplink(raw, wc) {  let msg;
+  try { msg = JSON.parse(raw); } catch (e) { return; }
+  const t = msg && msg.t;
+  if (t === 'ready' || t === 'list') {
+    pushState(wc);
+    if (state.bgId) pushBackground(wc);
+    return;
+  }
+  if (t === 'set') { setBackground(msg.payload && msg.payload.id); return; }
+  if (t === 'reset') { resetBackground(); return; }
+  if (t === 'beautify') { updateBeautify(msg.payload); return; }
+  if (t === 'hotkeys') { updateHotkeys(msg.payload); return; }
+  if (t === 'splash') { updateSplash(msg.payload); return; }
+  if (t === 'splashPreview') { log('info', 'splash preview: ' + previewSplash()); return; }
+  if (t === 'splashWin') { splashWindowAction(wc, msg.payload && msg.payload.action); return; }
+  if (t === 'preview') {
+    if (msg.payload && msg.payload.open) openCropWindow();
+    else closeCropWindow();
+    return;
+  }
+  if (t === 'refresh') { scanAll(); pushState(); if (state.bgId) pushBackground(); return; }
+  if (t === 'thumb') { pushThumb(wc, msg.payload && msg.payload.id); return; }
+  if (t === 'error') { log('warn', 'page: ' + JSON.stringify(msg).slice(0, 400)); return; }
+}
+
+function attach(wc) {
+  if (!wc) return;
+  if (!attached.has(wc.id)) {
+    attached.add(wc.id);
+    try {
+      wc.on('console-message', function () {
+        const args = Array.prototype.slice.call(arguments);
+        let text = null;
+        if (typeof args[2] === 'string') text = args[2];
+        else if (args[0] && typeof args[0].message === 'string') text = args[0].message;
+        else if (typeof args[1] === 'string') text = args[1];
+        if (!text || text.indexOf(PREFIX) !== 0) {
+          if (text && /mhub-wp|Uncaught|SyntaxError|TypeError|ReferenceError/i.test(text)) {
+            log('page-console', String(text).slice(0, 400));
+          }
+          return;
+        }
+        handleUplink(text.slice(PREFIX.length), wc);
+      });
+    } catch (e) { log('warn', 'console hook failed: ' + (e && e.message)); }
+    try {
+      wc.on('did-finish-load', function () {
+        injectedHash.delete(wc.id);
+        if (isTarget(wc)) setTimeout(function () { inject(wc); }, 250);
+      });
+    } catch (e) { /* ignore */ }
+    try {
+      wc.on('destroyed', function () {
+        attached.delete(wc.id);
+        injectedHash.delete(wc.id);
+      });
+    } catch (e) { /* ignore */ }
+    try {
+      wc.on('dom-ready', function () {
+        if (isStartup(wc)) {
+          mountSplash(wc);
+          setTimeout(function () { injectStartup(wc, true); }, 220);
+          if (!previewWin || previewWin.isDestroyed() || previewWin.webContents !== wc) autoMaximizeStartup(wc);
+        }
+      });
+    } catch (e) { /* ignore */ }
+    try {
+      wc.on('did-finish-load', function () {
+        if (isStartup(wc)) setTimeout(function () { injectStartup(wc, true); }, 200);
+      });
+    } catch (e) { /* ignore */ }
+  }
+  if (isStartup(wc)) {
+    injectStartup(wc);
+    if (!previewWin || previewWin.isDestroyed() || previewWin.webContents !== wc) autoMaximizeStartup(wc);
+    return;
+  }
+  if (isTarget(wc)) {
+    const payload = buildPayload();
+    if (payload && injectedHash.get(wc.id) !== payload.hash) inject(wc);
+  }
+}
+
+// ---------- 本地调试桥（采集/截图） ----------
+
+let cmdSeen = '';
+async function runCommand(cmd) {
+  const el = electron();
+  if (!el) return 'no electron';
+  if (cmd && cmd.cmd === 'show') {
+    try {
+      const wins = el.BrowserWindow.getAllWindows();
+      let hit = null;
+      for (const win of wins) {
+        try { if (isTarget(win.webContents)) { hit = win; break; } } catch (e) { /* ignore */ }
+      }
+      if (!hit) return 'no window';
+      if (hit.isMinimized()) hit.restore();
+      hit.show();
+      hit.maximize();
+      hit.focus();
+      return 'shown';
+    } catch (e) {
+      return 'show error: ' + (e && e.message);
+    }
+  }
+  if (cmd && cmd.cmd === 'shot') {
+    try {
+      const wc = targetWebContents()[0];
+      if (!wc) return 'no target';
+      const image = await wc.capturePage();
+      fs.writeFileSync(SHOT_FILE, image.toPNG());
+      return 'shot:' + SHOT_FILE;
+    } catch (e) {
+      return 'shot error: ' + (e && e.message);
+    }
+  }
+  if (cmd && cmd.cmd === 'hotkey') {
+    try {
+      if (cmd.action === 'random') return 'random=' + randomBackground();
+      return 'cycle=' + cycleBackground(Number(cmd.step) || 1);
+    } catch (e) {
+      return 'hotkey error: ' + (e && e.message);
+    }
+  }
+  if (!cmd || typeof cmd.expr !== 'string') return 'bad cmd';
+  const wc = targetWebContents()[0];
+  if (!wc) return 'no target';
+  try {
+    const value = await wc.executeJavaScript(cmd.expr, false);
+    let out;
+    try { out = JSON.stringify(value); } catch (e) { out = String(value); }
+    return out === undefined ? 'undefined' : out;
+  } catch (e) {
+    return 'EXC: ' + (e && e.message);
+  }
+}
+
+function devBridge() {
+  let stat;
+  try { stat = fs.statSync(CMD_FILE); } catch (e) { return; }
+  const sig = stat.mtimeMs + ':' + stat.size;
+  if (sig === cmdSeen) return;
+  cmdSeen = sig;
+  const cmd = readJson(CMD_FILE);
+  runCommand(cmd).then(function (result) {
+    try {
+      ensureDir(DATA_DIR);
+      fs.writeFileSync(OUT_FILE, JSON.stringify({ at: Date.now(), result: result }));
+      fs.unlinkSync(CMD_FILE);
+    } catch (e) { /* ignore */ }
+  });
+}
+
+// ---------- 全局快捷键 ----------
+
+function cycleBackground(step) {
+  const list = state.items;
+  if (!list.length) return 'empty';
+  let idx = list.findIndex(function (it) { return it.id === state.bgId; });
+  if (idx < 0) idx = step > 0 ? -1 : 0;
+  const next = list[(idx + step + list.length) % list.length];
+  if (!next) return 'none';
+  setBackground(next.id);
+  log('info', 'hotkey cycle -> ' + next.id);
+  return next.id;
+}
+
+function randomBackground() {
+  const list = state.items;
+  if (!list.length) return 'empty';
+  const pool = list.filter(function (it) { return it.id !== state.bgId; });
+  const pick = (pool.length ? pool : list)[Math.floor(Math.random() * (pool.length ? pool.length : list.length))];
+  if (!pick) return 'none';
+  setBackground(pick.id);
+  log('info', 'hotkey random -> ' + pick.id);
+  return pick.id;
+}
+
+let hotkeysDone = false;
+
+const HOTKEY_ACTIONS = {
+  next: function () { cycleBackground(1); },
+  prev: function () { cycleBackground(-1); },
+  random: function () { randomBackground(); },
+  toggle: function () {
+    state.enabled = !state.enabled && !!state.bgId;
+    if (!state.bgId) state.enabled = false;
+    saveState();
+    pushState();
+    pushBackground();
+    pushCropPreview();
+    log('info', 'hotkey toggle enabled=' + state.enabled);
+  },
+  preview: function () { openCropWindow(); }
+};
+
+function sanitizeAccel(text) {
+  const raw = String(text || '').replace(/\s+/g, '');
+  if (!raw) return '';
+  const parts = raw.split('+');
+  const key = parts.pop();
+  const mods = [];
+  for (const p of parts) {
+    const low = p.toLowerCase();
+    if (low === 'ctrl' || low === 'control') { if (mods.indexOf('Ctrl') < 0) mods.push('Ctrl'); }
+    else if (low === 'alt') { if (mods.indexOf('Alt') < 0) mods.push('Alt'); }
+    else if (low === 'shift') { if (mods.indexOf('Shift') < 0) mods.push('Shift'); }
+    else if (low === 'super' || low === 'win' || low === 'meta') { if (mods.indexOf('Super') < 0) mods.push('Super'); }
+    else return '';
+  }
+  if (!mods.length) return '';
+  let k = key;
+  if (/^[a-z]$/i.test(k)) k = k.toUpperCase();
+  else if (/^[0-9]$/.test(k)) { /* keep */ }
+  else if (/^f([1-9]|1[0-9]|2[0-4])$/i.test(k)) k = k.toUpperCase();
+  else if (!/^(Left|Right|Up|Down|Space|Enter|Escape|Tab|Backspace|Delete|Insert|Home|End|PageUp|PageDown|Plus|Minus|Comma|Period|Slash|Semicolon|Quote|Brackets?Left|Brackets?Right)$/.test(k)) return '';
+  return mods.join('+') + '+' + k;
+}
+
+function updateHotkeys(patch) {
+  if (!patch || typeof patch !== 'object') return;
+  for (const key of Object.keys(DEFAULT_HOTKEYS)) {
+    if (patch[key] === undefined) continue;
+    const val = sanitizeAccel(patch[key]);
+    if (patch[key] !== '' && !val) continue;
+    state.hotkeys[key] = val;
+  }
+  saveState();
+  registerHotkeys();
+  pushState();
+}
+
+function registerHotkeys() {
+  const el = electron();
+  if (!el || !el.globalShortcut) return;
+  try { el.globalShortcut.unregisterAll(); } catch (e) { /* ignore */ }
+  const errors = [];
+  const used = {};
+  for (const action of Object.keys(HOTKEY_ACTIONS)) {
+    const accel = String(state.hotkeys[action] || '');
+    if (!accel) continue;
+    if (used[accel]) { errors.push({ action: action, accel: accel, reason: 'duplicate' }); continue; }
+    used[accel] = true;
+    try {
+      const ok = el.globalShortcut.register(accel, HOTKEY_ACTIONS[action]);
+      if (!ok) errors.push({ action: action, accel: accel, reason: 'occupied' });
+    } catch (e) {
+      errors.push({ action: action, accel: accel, reason: 'error' });
+    }
+  }
+  state.hotkeyErrors = errors;
+  if (errors.length) log('warn', 'hotkey issues: ' + JSON.stringify(errors));
+  if (!hotkeysDone) {
+    hotkeysDone = true;
+    try {
+      el.app.on('will-quit', function () {
+        try { el.globalShortcut.unregisterAll(); } catch (e) { /* ignore */ }
+      });
+    } catch (e) { /* ignore */ }
+  }
+}
+
+// ---------- 启动 ----------
+
+function boot() {
+  const el = electron();
+  if (!el) return;
+  const app = el.app;
+
+  try {
+    if (el.protocol && !app.isReady() && typeof el.protocol.registerSchemesAsPrivileged === 'function') {
+      el.protocol.registerSchemesAsPrivileged([{
+        scheme: SCHEME,
+        privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true }
+      }]);
+    }
+  } catch (e) { log('warn', 'scheme register failed: ' + (e && e.message)); }
+
+  const start = function () {
+    installProtocol(el);
+    scanAll();
+
+    try {
+      app.on('web-contents-created', function (_e, wc) { attach(wc); });
+      el.webContents.getAllWebContents().forEach(attach);
+    } catch (e) { log('warn', 'attach failed: ' + (e && e.message)); }
+
+    const timer = setInterval(function () {
+      try { el.webContents.getAllWebContents().forEach(attach); } catch (e) { /* ignore */ }
+      try { if (splashMaxPending) splashMaxPending = !maximizeMainWindow(); } catch (e) { /* ignore */ }
+      try { devBridge(); } catch (e) { /* ignore */ }
+    }, 1200);
+    if (timer.unref) timer.unref();
+
+    registerHotkeys();
+    log('info', 'plugin ready v2, pid=' + process.pid);
+  };
+
+  try {
+    if (app.isReady()) start();
+    else app.whenReady().then(start).catch(function (e) { log('error', 'whenReady failed: ' + (e && e.message)); });
+  } catch (e) {
+    log('error', 'boot failed: ' + (e && e.message));
+  }
+}
+
+try { boot(); } catch (e) { log('error', 'boot threw: ' + (e && e.message)); }
