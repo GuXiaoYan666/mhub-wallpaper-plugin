@@ -521,6 +521,18 @@ function matchPids(snapshot, names) {
   }
   return out.sort((a, b) => a - b);
 }
+/* 进程快照里已有内置播放器在运行，但它还没进入播放器列表：
+   说明是刚启动的，需要立即补扫，而不是等缓存过期。 */
+function catalogRunningButUnknown(snapshot) {
+  if (!snapshot || !snapshot.ok) return false;
+  const known = new Set(scanState.players.map((p) => p.id));
+  for (const spec of CATALOG) {
+    if (known.has(spec.id)) continue;
+    const probe = { id: spec.id, exe: (spec.exe && spec.exe[0]) || '' };
+    if (matchPids(snapshot, procNamesFor(probe)).length) return true;
+  }
+  return false;
+}
 const PROC_LIST_PS = [
   "$ProgressPreference = 'SilentlyContinue'",
   '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
@@ -771,6 +783,11 @@ async function waitForProcess(player, timeoutMs) {
   }
 }
 let scanState = { at: 0, players: [] };
+/* 同一时刻只允许一次完整扫描：定时刷新与识别补扫可能同时触发，
+   叠加执行会让界面长时间停在旧列表上。 */
+let scanInflight = null;
+/* 补扫冷却：播放器进程存在但确实无法识别时，避免每 2 秒重复完整扫描。 */
+let unknownProbeAt = 0;
 async function discoverPlayers() {
   const warnings = [];
   const both = await Promise.all([readUninstallEntries(), readStartMenuTargets(), readProcessPaths()]);
@@ -843,6 +860,12 @@ async function discoverPlayers() {
   return { players: players, warnings: warnings, regOk: reg.ok, lnkOk: lnk.ok };
 }
 async function scanPlayers(opts) {
+  if (scanInflight) return scanInflight;
+  scanInflight = scanPlayersOnce(opts);
+  try { return await scanInflight; }
+  finally { scanInflight = null; }
+}
+async function scanPlayersOnce(opts) {
   const started = Date.now();
   try {
     const force = !!(opts && opts.force);
@@ -955,6 +978,13 @@ async function refreshRunning(ids) {
     const now = Date.now();
     if (!scanState.players.length || now - scanState.at > CFG.scanTtlMs) {
       const scanned = await scanPlayers({});
+      if (!scanned.ok) return scanned;
+    }
+    /* 轻量轮询发现新启动的播放器时立即补一次完整扫描，
+       否则要等缓存过期（最长 60 秒）才会出现在列表里。 */
+    if (catalogRunningButUnknown(snap) && Date.now() - unknownProbeAt > 30000) {
+      unknownProbeAt = Date.now();
+      const scanned = await scanPlayers({ force: true });
       if (!scanned.ok) return scanned;
     }
     const states = {};
