@@ -2,12 +2,16 @@
 
 # M HUB Wallpaper & Startup Plugin
 
-**给 M HUB（迈从驱动）增加壁纸与启动页控制中心的非官方插件**
+### 壁纸与启动页，焕然新生 // Wallpaper Reimagined
 
-![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D4?logo=windows)
-![Version](https://img.shields.io/badge/version-v3.4.0-success)
-![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-orange)
-![DotNET](https://img.shields.io/badge/.NET-Framework%204.x-512BD4)
+[![release](https://img.shields.io/badge/release-v3.4.0-success)](https://github.com/GuXiaoYan666/mhub-wallpaper-plugin/releases/latest)
+[![license](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-orange)](LICENSE)
+[![platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D4?logo=windows)](#环境要求)
+[![dotnet](https://img.shields.io/badge/.NET-Framework%204.x-512BD4)](#从源码构建)
+
+### [⬇ 下载安装](#安装) · [📖 使用指南](#安装) · [⚙ 技术说明](#实现原理) · [❓ 常见问题](#常见问题)
+
+**最新安装包：[M-HUB-Wallpaper-Startup-Plugin.exe](https://github.com/GuXiaoYan666/mhub-wallpaper-plugin/releases/latest)**
 
 </div>
 
@@ -57,6 +61,18 @@
 
 ## 效果展示
 
+### 演示视频
+
+<div align="center">
+
+<video src="assets/demo/demo.mp4" controls width="90%" poster="assets/screenshots/purple-dragon.png">
+  你的浏览器不支持视频播放，可直接下载：<a href="assets/demo/demo.mp4">demo.mp4</a>
+</video>
+
+</div>
+
+### 界面截图
+
 以下均为插件注入后的真实 M HUB 界面，底部设备卡片与顶部控件可正常交互。
 
 |  |  |
@@ -81,9 +97,10 @@
 
 ## 安装
 
-1. 完全关闭 M HUB。
-2. 运行 `M-HUB-Wallpaper-Startup-Plugin.exe`，按提示完成安装。
-3. 启动 M HUB，进入「设置 → 主题设置」即可看到壁纸与启动页控制中心。
+1. 前往 [**Releases 下载页**](https://github.com/GuXiaoYan666/mhub-wallpaper-plugin/releases/latest)，下载最新的 `M-HUB-Wallpaper-Startup-Plugin.exe`。
+2. 完全关闭 M HUB。
+3. 运行安装器，按提示完成安装。
+4. 启动 M HUB，进入「设置 → 主题设置」即可看到壁纸与启动页控制中心。
 
 安装完成后会在以下位置留下日志，便于排查问题：
 
@@ -149,6 +166,7 @@ src/payload/renderer/            启动动画页面、样式、脚本与音效
 src/plugins/lyric-bridge/        歌词补丁
 src/plugins/sysdeck/             仪表板
 assets/screenshots/              README 效果展示截图
+assets/demo/demo.mp4             功能演示视频
 ```
 
 ---
