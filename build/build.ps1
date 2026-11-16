@@ -1,3 +1,5 @@
+param([string]$ReleaseVersion = '')
+
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -9,10 +11,16 @@ $installer = Join-Path $root 'src\installer\Installer.cs'
 $manifest = Join-Path $root 'src\installer\app.manifest'
 
 $version = 'dev'
-try {
-    $tag = (git -C $root describe --tags --abbrev=0 2>$null)
-    if ($tag) { $version = $tag.TrimStart('v') }
-} catch { }
+if ($ReleaseVersion) {
+    $version = $ReleaseVersion.TrimStart('v')
+} elseif ($env:MHUB_VERSION) {
+    $version = $env:MHUB_VERSION.TrimStart('v')
+} else {
+    try {
+        $tag = (git -C $root describe --tags --abbrev=0 2>$null)
+        if ($tag) { $version = $tag.TrimStart('v') }
+    } catch { }
+}
 $out = Join-Path $dist ("M-HUB-Wallpaper-Startup-Plugin-" + $version + ".exe")
 
 Write-Host "[1/4] Stage payload (version $version)"

@@ -30,12 +30,32 @@ namespace MHubStartupPlugin
         internal const string PayloadResource = "payload.zip";
 
         /* startup-loading.html 在 asar 中被标记为 unpacked，Electron 会按归档文件名推导
-           「<归档名>.unpacked」目录。归档改名后，启动页资源也必须位于改名后的目录。 */
+           「<归档名>.unpacked」目录。归档改名后，启动页资源也必须位于改名后的目录。
+           部分官方版本把 renderer 完全打进 app.asar，不存在 unpacked 目录，
+           此时返回 null，安装器不再依赖该目录。 */
         internal static string RendererPath(string dir)
         {
-            string renamed = Path.Combine(dir, Program.OriginalUnpackedRel, @"bundled\renderer");
-            if (Directory.Exists(renamed)) return renamed;
-            return Path.Combine(dir, Program.RendererRel);
+            string[] candidates = new string[]
+            {
+                Path.Combine(dir, Program.OriginalUnpackedRel, @"bundled\renderer"),
+                Path.Combine(dir, Program.RendererRel),
+                Path.Combine(dir, @"resources\app\bundled\renderer"),
+                Path.Combine(dir, @"resources\app\renderer")
+            };
+            foreach (string candidate in candidates)
+            {
+                if (Directory.Exists(candidate)) return candidate;
+            }
+            return null;
+        }
+
+        /* 备份目录优先放在 renderer（沿用旧版本目录结构以便还原）；
+           没有 unpacked 资源时放到 resources 下的固定目录，卸载时同样能找到。 */
+        internal static string BackupRoot(string dir)
+        {
+            string renderer = RendererPath(dir);
+            if (renderer != null) return renderer;
+            return Path.Combine(dir, @"resources\mhub-integration-backup");
         }
 
         private static bool _consoleReady;
@@ -96,7 +116,7 @@ namespace MHubStartupPlugin
                 string renderer = Program.RendererPath(dir);
                 string pethub = Path.Combine(dir, PetHubRel);
                 WriteLine("Hub exe     : " + (File.Exists(Path.Combine(dir, ExeName)) ? "yes" : "no"));
-                WriteLine("Renderer    : " + (Directory.Exists(renderer) ? "yes" : "no") + "  " + renderer);
+                WriteLine("Renderer    : " + (renderer != null ? "yes  " + renderer : "no (bundled in app.asar)"));
                 WriteLine("PetHub      : " + (Directory.Exists(pethub) ? "yes" : "no") + "  " + pethub);
                 WriteLine("Wallpaper   : " + (File.Exists(Path.Combine(dir, Program.WallpaperRel, "index.js")) ? "installed" : "not installed"));
                 WriteLine("Mod state   : " + (File.Exists(Path.Combine(dir, Program.WallpaperRel, @"splash\splash.js")) ? "installed" : "not installed"));
@@ -105,7 +125,7 @@ namespace MHubStartupPlugin
                 WriteLine("Dashboard   : " + (File.Exists(Path.Combine(dir, Program.AppRel, @"sysdeck\index.js")) ? "installed" : "not installed"));
                 WriteLine("Official    : " + (File.Exists(Path.Combine(dir, Program.OriginalAsarRel)) ? "preserved original archive" : "standard archive"));
                 WriteLine("Resources   : " + (Directory.Exists(Path.Combine(dir, Program.OriginalUnpackedRel)) ? "preserved original unpacked" : "standard unpacked"));
-                WriteLine("Backups     : " + Installer.CountBackups(renderer));
+                WriteLine("Backups     : " + Installer.CountBackups(Program.BackupRoot(dir)));
             }
 
             WriteLine("No files were changed.");
@@ -388,8 +408,10 @@ namespace MHubStartupPlugin
             string pethub = Path.Combine(dir, Program.PetHubRel);
             string wallpaper = Path.Combine(dir, Program.WallpaperRel);
 
-            if (!Directory.Exists(renderer))
-                throw new InvalidOperationException("未找到 renderer 目录：\r\n" + renderer);
+            /* 有的官方版本把 renderer 整体打进 app.asar，没有 app.asar.unpacked\bundled\renderer。
+               本版本不修改启动页文件，缺失该目录时跳过相关备份即可，不能因此中断安装。 */
+            if (renderer == null)
+                Report("未检测到 unpacked renderer，跳过启动页文件备份。");
 
             /* pet-hub 只是本插件的兼容 shim，不再依赖其他插件预先修改 app.asar。 */
             if (!Directory.Exists(pethub)) Directory.CreateDirectory(pethub);
@@ -615,14 +637,11 @@ namespace MHubStartupPlugin
         private static void VerifyInstallation(string dir, string payloadRoot)
         {
             string original = Path.Combine(dir, Program.OriginalAsarRel);
-            string originalUnpacked = Path.Combine(dir, Program.OriginalUnpackedRel);
             string asar = Path.Combine(dir, Program.AsarRel);
             string bootstrap = Path.Combine(dir, Program.AppRel, @"out\main\index.js");
             string shim = Path.Combine(dir, Program.PetHubRel, "index.js");
             string renderer = Program.RendererPath(dir);
             if (!File.Exists(original)) throw new IOException("安装校验失败：官方归档备份不存在。");
-            if (!Directory.Exists(originalUnpacked))
-                throw new IOException("安装校验失败：官方 unpacked 资源未保留。");
             if (File.Exists(asar)) throw new IOException("安装校验失败：app.asar 仍占用入口，请关闭 M HUB 后重试。");
             if (!File.Exists(bootstrap) || File.ReadAllText(bootstrap).IndexOf(Program.BootstrapMarker, StringComparison.Ordinal) < 0)
                 throw new IOException("安装校验失败：独立加载入口未正确写入。");
@@ -640,7 +659,7 @@ namespace MHubStartupPlugin
                 if (!SameBytes(Path.Combine(splashDir, name), Path.Combine(payloadRoot, "renderer", name)))
                     throw new IOException("安装校验失败：启动动画资源未写入（" + name + "）。请关闭 M HUB 后重试。");
             }
-            if (!File.Exists(Path.Combine(renderer, "startup-loading.html")))
+            if (renderer != null && !File.Exists(Path.Combine(renderer, "startup-loading.html")))
                 throw new IOException("安装校验失败：官方启动页缺失，无法挂载启动动画。");
             if (!File.Exists(Path.Combine(splashDir, @"startup-assets\line-1.mp3")))
                 throw new IOException("安装校验失败：启动动画音效缺失。");
@@ -683,13 +702,14 @@ namespace MHubStartupPlugin
                 throw new InvalidOperationException("M HUB 安装目录无效：" + (dir == null ? "(空)" : dir));
 
             string renderer = Program.RendererPath(dir);
+            string backupRoot = Program.BackupRoot(dir);
             string pethub = Path.Combine(dir, Program.PetHubRel);
             string wallpaper = Path.Combine(dir, Program.WallpaperRel);
             Report("正在关闭 M HUB…");
             StopHub();
 
             UninstallResult result = new UninstallResult();
-            string backupDir = FindLatestBackup(renderer);
+            string backupDir = FindLatestBackup(backupRoot);
             result.BackupDir = backupDir;
 
             /* 重复安装会产生多个备份。卸载必须从最早的备份出发：
@@ -698,7 +718,7 @@ namespace MHubStartupPlugin
             HashSet<string> deletes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             List<string> usedBackups = new List<string>();
 
-            foreach (string oneBackup in ListBackupsOldestFirst(renderer))
+            foreach (string oneBackup in ListBackupsOldestFirst(backupRoot))
             {
                 string manifest = Path.Combine(oneBackup, "manifest.txt");
                 if (!File.Exists(manifest)) continue;
@@ -789,6 +809,7 @@ namespace MHubStartupPlugin
                 try { if (Directory.Exists(oneBackup)) Directory.Delete(oneBackup, true); }
                 catch { }
             }
+            RemoveEmptyDirectory(backupRoot);
             RestoreArchive(dir);
 
             foreach (string plugin in PluginDirs)
@@ -819,6 +840,7 @@ namespace MHubStartupPlugin
         private static string NormalizeBackupPath(string absolute, string recordedRenderer, string renderer)
         {
             if (string.IsNullOrEmpty(recordedRenderer) || string.IsNullOrEmpty(absolute)) return absolute;
+            if (string.IsNullOrEmpty(renderer)) return absolute;
             if (absolute.StartsWith(recordedRenderer, StringComparison.OrdinalIgnoreCase))
                 return renderer + absolute.Substring(recordedRenderer.Length);
             return absolute;
@@ -955,12 +977,13 @@ namespace MHubStartupPlugin
     {
         internal static string Create(string dir, string renderer, string pethub, string wallpaper, string payloadRoot)
         {
+            string backupRoot = string.IsNullOrEmpty(renderer) ? Program.BackupRoot(dir) : renderer;
             string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-            string backupDir = Path.Combine(renderer, Program.BackupPrefix + stamp);
+            string backupDir = Path.Combine(backupRoot, Program.BackupPrefix + stamp);
             int index = 2;
             while (Directory.Exists(backupDir))
             {
-                backupDir = Path.Combine(renderer, Program.BackupPrefix + stamp + "-" + index);
+                backupDir = Path.Combine(backupRoot, Program.BackupPrefix + stamp + "-" + index);
                 index++;
             }
             Directory.CreateDirectory(backupDir);
@@ -968,7 +991,7 @@ namespace MHubStartupPlugin
             List<string> lines = new List<string>();
             lines.Add("# M HUB wallpaper and startup integration backup");
             lines.Add("created=" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-            lines.Add("renderer=" + renderer);
+            lines.Add("renderer=" + (renderer ?? string.Empty));
             lines.Add("pethub=" + pethub);
             lines.Add("wallpaper=" + wallpaper);
             BackupFiles(backupDir, lines, Path.Combine(wallpaper, "splash"), Installer.SplashFiles, "splash", Path.Combine(payloadRoot, "renderer"));

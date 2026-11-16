@@ -1,5 +1,12 @@
 # 更新日志
 
+## v3.4.1
+
+### 修复
+- 修复部分 M HUB 安装目录没有 `resources\app.asar.unpacked\bundled\renderer` 时安装直接失败（报“未找到 renderer 目录”）：renderer 改为可选，缺失时跳过启动页文件备份，不再中断安装。
+- 兼容 `resources\app\bundled\renderer`、`resources\app\renderer` 等官方目录变体。
+- 无 renderer 时备份改存 `resources\mhub-integration-backup`，卸载可正常找到并清理。
+
 ## v3.4.0
 
 ### 修复
