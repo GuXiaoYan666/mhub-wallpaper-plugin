@@ -6,10 +6,13 @@
   const path = require('path');
   const fs = require('fs');
   const os = require('os');
-  const original = path.join(
+  const originalAsar = path.join(
     process.resourcesPath,
     'app.mhub-wallpaper-original.asar'
   );
+  /* 目录版安装没有 app.asar，安装器会把官方入口保存为 index.official.js。 */
+  const officialEntry = path.join(__dirname, 'index.official.js');
+  const original = fs.existsSync(originalAsar) ? originalAsar : officialEntry;
 
   const dataDir = path.join(
     process.env.APPDATA || os.homedir(),

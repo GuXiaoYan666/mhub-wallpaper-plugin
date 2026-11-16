@@ -26,6 +26,8 @@ namespace MHubStartupPlugin
         internal const string WallpaperRel = @"resources\app\wallpaper-hub";
         internal const string ShimMarker = "M HUB startup shim";
         internal const string BootstrapMarker = "M HUB wallpaper independent bootstrap";
+        internal const string AppEntryRel = @"resources\app\out\main\index.js";
+        internal const string OfficialEntryRel = @"resources\app\out\main\index.official.js";
         internal const string BackupPrefix = "mhub-integration-backup-";
         internal const string PayloadResource = "payload.zip";
 
@@ -535,13 +537,61 @@ namespace MHubStartupPlugin
             }
         }
 
+        private static bool HasBootstrapMarker(string file)
+        {
+            try
+            {
+                return File.ReadAllText(file).IndexOf(Program.BootstrapMarker, StringComparison.Ordinal) >= 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string ListArchives(string dir)
+        {
+            try
+            {
+                string resources = Path.Combine(dir, "resources");
+                if (!Directory.Exists(resources)) return "(resources 目录不存在)";
+                string[] files = Directory.GetFiles(resources, "*.asar");
+                if (files.Length == 0) return "(无 .asar 文件)";
+                string[] names = new string[files.Length];
+                for (int i = 0; i < files.Length; i++) names[i] = Path.GetFileName(files[i]);
+                return string.Join(", ", names);
+            }
+            catch
+            {
+                return "(读取失败)";
+            }
+        }
+
         private static int InstallBootstrap(string dir, string sourceRoot)
         {
             string appDir = Path.Combine(dir, Program.AppRel);
             string asar = Path.Combine(dir, Program.AsarRel);
             string original = Path.Combine(dir, Program.OriginalAsarRel);
-            if (!File.Exists(asar) && !File.Exists(original))
-                throw new InvalidOperationException("未找到 M HUB 官方 app.asar，无法配置独立加载入口。");
+            string entry = Path.Combine(dir, Program.AppEntryRel);
+            string officialEntry = Path.Combine(dir, Program.OfficialEntryRel);
+            bool hasAsar = File.Exists(asar) || File.Exists(original);
+
+            /* 部分官方安装没有 app.asar，入口直接是 resources\app\out\main\index.js。
+               这种目录版安装先保留官方入口为 index.official.js，再写入本插件入口。 */
+            if (!hasAsar)
+            {
+                if (File.Exists(entry) && !HasBootstrapMarker(entry))
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(officialEntry));
+                    File.Copy(entry, officialEntry, true);
+                }
+                if (!File.Exists(officialEntry))
+                    throw new InvalidOperationException(
+                        "未找到 M HUB 官方入口：resources\\app.asar 与 resources\\app\\out\\main\\index.js 均不存在。\r\n" +
+                        "请确认选择的是 M HUB 安装目录（例如 E:\\MCHOSE HUB），或先重新安装官方程序。\r\n" +
+                        "当前 resources 中的归档：" + ListArchives(dir)
+                    );
+            }
 
             Directory.CreateDirectory(appDir);
             int count = CopyFiles(sourceRoot, appDir, BootstrapFiles);
@@ -638,10 +688,13 @@ namespace MHubStartupPlugin
         {
             string original = Path.Combine(dir, Program.OriginalAsarRel);
             string asar = Path.Combine(dir, Program.AsarRel);
+            string officialEntry = Path.Combine(dir, Program.OfficialEntryRel);
             string bootstrap = Path.Combine(dir, Program.AppRel, @"out\main\index.js");
             string shim = Path.Combine(dir, Program.PetHubRel, "index.js");
             string renderer = Program.RendererPath(dir);
-            if (!File.Exists(original)) throw new IOException("安装校验失败：官方归档备份不存在。");
+            bool hasAsar = File.Exists(original) || File.Exists(asar);
+            if (!hasAsar && !File.Exists(officialEntry))
+                throw new IOException("安装校验失败：官方入口备份不存在。");
             if (File.Exists(asar)) throw new IOException("安装校验失败：app.asar 仍占用入口，请关闭 M HUB 后重试。");
             if (!File.Exists(bootstrap) || File.ReadAllText(bootstrap).IndexOf(Program.BootstrapMarker, StringComparison.Ordinal) < 0)
                 throw new IOException("安装校验失败：独立加载入口未正确写入。");
@@ -692,6 +745,16 @@ namespace MHubStartupPlugin
                 if (Directory.Exists(unpacked))
                     throw new InvalidOperationException("检测到 M HUB 更新后的新 app.asar.unpacked。为避免覆盖新版，已停止还原；请先重新安装本插件，再卸载。");
                 Directory.Move(originalUnpacked, unpacked);
+            }
+
+            /* 目录版安装：把保留的官方入口放回原位。 */
+            string entry = Path.Combine(dir, Program.AppEntryRel);
+            string officialEntry = Path.Combine(dir, Program.OfficialEntryRel);
+            if (File.Exists(officialEntry))
+            {
+                if (File.Exists(entry) && HasBootstrapMarker(entry)) File.Delete(entry);
+                if (!File.Exists(entry)) File.Move(officialEntry, entry);
+                else File.Delete(officialEntry);
             }
         }
 
