@@ -4,7 +4,7 @@
 
 ### 壁纸与启动页，焕然新生 // Wallpaper Reimagined
 
-[![release](https://img.shields.io/badge/release-v3.4.0-success)](https://github.com/GuXiaoYan666/mhub-wallpaper-plugin/releases/latest)
+[![release](https://img.shields.io/badge/release-v3.4.3-success)](https://github.com/GuXiaoYan666/mhub-wallpaper-plugin/releases/latest)
 [![license](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-orange)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D4?logo=windows)](#环境要求)
 [![dotnet](https://img.shields.io/badge/.NET-Framework%204.x-512BD4)](#从源码构建)
@@ -139,7 +139,7 @@
 
 ## 安装
 
-1. 前往 [**Releases 下载页**](https://github.com/GuXiaoYan666/mhub-wallpaper-plugin/releases/latest)，下载最新的 `M-HUB-Wallpaper-Startup-Plugin.exe`。
+1. 前往 [**Releases 下载页**](https://github.com/GuXiaoYan666/mhub-wallpaper-plugin/releases/latest)，下载最新的 `M-HUB-Wallpaper-Startup-Plugin-<版本>.exe`。
 2. 完全关闭 M HUB。
 3. 运行安装器，按提示完成安装。
 4. 启动 M HUB，进入「设置 → 主题设置」即可看到壁纸与启动页控制中心。
