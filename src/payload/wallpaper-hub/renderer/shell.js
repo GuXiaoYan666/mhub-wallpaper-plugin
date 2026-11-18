@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '3.3.7';
+  var VERSION = '4.0';
   var PREFIX = '[mhub-wp]';
   var existing = window.__mhubWallpaper;
   if (existing && existing.version === VERSION) {
@@ -51,14 +51,23 @@
     accessLevel: '03',
     accent: '#1f63ff',
     glitchA: '#ff3b30',
-    glitchB: '#2971b8'
+    glitchB: '#2971b8',
+    stages: { intro: true, setup: true, steps: true, welcome: true }
   };
   var DEFAULT_HOTKEYS = { next: 'Alt+Right', prev: 'Alt+Left', random: 'Alt+R', toggle: 'Alt+P', preview: '' };
 
   var state = {
+    version: VERSION,
+    author: '顾小颜',
     items: [],
+    libraries: [],
+    favorites: [],
+    recent: [],
+    rotation: { enabled: false, intervalMinutes: 30, scope: 'all', lastRunAt: 0 },
+    scenePerformance: { preset: 'balanced', fps: 30, renderDpr: 1, videoTexScale: 0.75, pauseWhenHidden: true },
     bgId: '',
     enabled: false,
+    overlayOfficial: false,
     beautify: Object.assign({}, DEFAULT_BEAUTIFY),
     splash: Object.assign({}, DEFAULT_SPLASH),
     hotkeys: Object.assign({}, DEFAULT_HOTKEYS),
@@ -66,8 +75,15 @@
     error: null
   };
   var mediaInfo = null;
-  var thumbCache = {};
-  var thumbAsked = {};
+  var sceneSession = null;
+  var sceneGeneration = 0;
+  var sceneRuntimeRequested = false;
+  var THUMB_CACHE_LIMIT = 32;
+  var THUMB_CACHE_CHAR_LIMIT = 8 * 1024 * 1024;
+  var THUMB_ASKED_LIMIT = 128;
+  var thumbCache = new Map();
+  var thumbCacheChars = 0;
+  var thumbAsked = new Map();
   var panel = null;
   var splashPanel = null;
   var panelSig = '';
@@ -89,6 +105,37 @@
 
   function clamp(n, min, max) { return Math.min(max, Math.max(min, n)); }
 
+  function cachedThumb(id) {
+    if (!thumbCache.has(id)) return '';
+    var value = thumbCache.get(id);
+    thumbCache.delete(id);
+    thumbCache.set(id, value);
+    return value;
+  }
+
+  function markThumbAsked(id) {
+    if (thumbAsked.has(id)) return false;
+    if (thumbAsked.size >= THUMB_ASKED_LIMIT) thumbAsked.delete(thumbAsked.keys().next().value);
+    thumbAsked.set(id, true);
+    return true;
+  }
+
+  function storeThumb(id, dataUrl) {
+    if (thumbCache.has(id)) {
+      thumbCacheChars -= thumbCache.get(id).length;
+      thumbCache.delete(id);
+    }
+    if (!dataUrl || dataUrl.length > THUMB_CACHE_CHAR_LIMIT) return;
+    thumbCache.set(id, dataUrl);
+    thumbCacheChars += dataUrl.length;
+    while (thumbCache.size > THUMB_CACHE_LIMIT || thumbCacheChars > THUMB_CACHE_CHAR_LIMIT) {
+      var oldest = thumbCache.keys().next().value;
+      var value = thumbCache.get(oldest) || '';
+      thumbCache.delete(oldest);
+      thumbCacheChars -= value.length;
+    }
+  }
+
   // ---------- 主题 ----------
 
   function luminance(rgb) {
@@ -99,15 +146,28 @@
     return 0.2126 * Number(m[0]) + 0.7152 * Number(m[1]) + 0.0722 * Number(m[2]);
   }
 
+  function explicitTheme(node) {
+    if (!node || !node.getAttribute) return '';
+    var attrs = ['data-theme', 'theme', 'data-mode', 'data-color-scheme'];
+    for (var i = 0; i < attrs.length; i++) {
+      var value = String(node.getAttribute(attrs[i]) || '').toLowerCase();
+      if (/(^|[-_\s])(dark|light)([-_\s]|$)/.test(value)) return value.indexOf('dark') !== -1 ? 'dark' : 'light';
+    }
+    var cls = String(node.className && node.className.baseVal !== undefined ? node.className.baseVal : node.className || '').toLowerCase();
+    if (/(^|[-_\s])(dark|light)([-_\s]|$)/.test(cls)) return cls.indexOf('dark') !== -1 ? 'dark' : 'light';
+    return '';
+  }
+
   function detectTheme() {
-    var attr = '';
-    try {
-      attr = document.documentElement.getAttribute('data-theme') ||
-        (document.body && document.body.getAttribute('data-theme')) || '';
-    } catch (e) { /* ignore */ }
-    if (attr === 'light' || attr === 'dark') return attr;
+    /* M HUB 不同版本会在 html / body / #app 上切换 data-theme、dark class 或
+       theme-setting-tabs.value。优先读取显式标记，避免透明背景导致亮度误判。 */
+    var roots = [document.documentElement, document.body, document.querySelector('#app')];
+    for (var r = 0; r < roots.length; r++) {
+      var marked = explicitTheme(roots[r]);
+      if (marked) return marked;
+    }
     var seg = document.querySelector('.theme-setting-tabs');
-    var segValue = seg && seg.getAttribute('value');
+    var segValue = seg && String(seg.getAttribute('value') || seg.value || '').toLowerCase();
     if (segValue === 'light' || segValue === 'dark') return segValue;
     var candidates = [document.body, document.querySelector('#app'), document.documentElement];
     for (var i = 0; i < candidates.length; i++) {
@@ -117,6 +177,19 @@
       if (lum !== null) return lum < 145 ? 'dark' : 'light';
     }
     return 'dark';
+  }
+
+  function syncControlTheme() {
+    var theme = detectTheme();
+    var accent = accentColor();
+    appliedTheme = theme;
+    var cards = [panel, splashPanel];
+    for (var i = 0; i < cards.length; i++) {
+      if (!cards[i] || !cards[i].isConnected) continue;
+      cards[i].setAttribute('data-wp-theme', theme);
+      try { cards[i].style.setProperty('--wp-accent', accent); } catch (e) { /* ignore */ }
+    }
+    return theme;
   }
 
   function accentColor() {
@@ -184,11 +257,12 @@
     var el = document.createElement('div');
     el.id = 'mhub-wp-bg';
     el.setAttribute('data-mhub-wp', '1');
-    el.style.cssText = 'position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0;';
+    el.style.cssText = 'position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:-1;';
 
     var media = document.createElement('div');
     media.className = 'mhub-wp-bg__media';
-    media.style.cssText = 'position:absolute;inset:0;transform-origin:center;will-change:transform;backface-visibility:hidden;';
+    /* 不常驻 will-change：静态壁纸无需一直占用一张全屏 GPU 纹理。 */
+    media.style.cssText = 'position:absolute;inset:0;transform-origin:center;';
 
     /* 「适应」时用同一张图的放大模糊版垫底，避免出现黑边 */
     var back = document.createElement('div');
@@ -206,21 +280,155 @@
     return el;
   }
 
+  function releaseBgNode() {
+    destroyScene();
+    var old = bgNode;
+    bgNode = null;
+    if (!old) return;
+    try {
+      if (old.tagName === 'VIDEO') {
+        old.pause();
+        old.removeAttribute('src');
+        old.removeAttribute('poster');
+        /* 主动触发媒体资源释放，仅 removeChild 可能让解码器/网络缓存多存活一段时间。 */
+        old.load();
+      } else if (old.tagName === 'IMG') {
+        old.removeAttribute('src');
+      }
+    } catch (e) { /* ignore */ }
+    if (old.parentNode) old.parentNode.removeChild(old);
+  }
+
+  function destroyScene() {
+    sceneGeneration++;
+    var old = sceneSession;
+    sceneSession = null;
+    if (old) {
+      try { old.destroy(); } catch (e) { /* ignore */ }
+    }
+  }
+
+  function syncSceneVisibility() {
+    if (!sceneSession) return;
+    var performance = mediaInfo && mediaInfo.performance || {};
+    sceneSession.setPaused(!!document.hidden && performance.pauseWhenHidden !== false);
+  }
+
+  var sceneState = { phase: 'idle', message: '', detail: null };
+
+  function scenePhaseLabel(phase) {
+    var labels = {
+      'preflight-project': '校验项目配置',
+      'preflight-pkg': '校验场景资源包',
+      mount: '初始化 WebWallGL',
+      ready: 'WebWallGL 已就绪',
+      error: '场景加载失败'
+    };
+    return labels[phase] || '准备场景渲染器';
+  }
+
+  function updateSceneStatus() {
+    if (!panel || !panel.__refs || !panel.__refs.playback) return;
+    var node = panel.__refs.playback.sceneStatus;
+    if (!node) return;
+    var isScene = !!(mediaInfo && (mediaInfo.kind === 'scene' || mediaInfo.kind === 'web') && mediaInfo.sceneBase);
+    node.style.display = isScene ? '' : 'none';
+    if (!isScene) return;
+    node.textContent = sceneState.message || '场景加载中';
+    node.setAttribute('data-scene-phase', sceneState.phase || 'idle');
+  }
+
+  function setSceneStatus(phase, message, detail) {
+    sceneState = { phase: phase || 'idle', message: String(message || ''), detail: detail || null };
+    updateSceneStatus();
+  }
+
+  function mountScene(media) {
+    destroyScene();
+    if (!mediaInfo || !mediaInfo.sceneBase) {
+      setSceneStatus('error', '已回退静态预览 · 场景资源地址为空');
+      return;
+    }
+    if (!window.__mhubWpScene) {
+      setSceneStatus('runtime', '场景加载中 · 正在加载渲染器');
+      if (!sceneRuntimeRequested) {
+        sceneRuntimeRequested = true;
+        uplink({ t: 'sceneRuntimeNeeded', payload: { id: mediaInfo.id } });
+      }
+      return;
+    }
+    sceneRuntimeRequested = false;
+    var host = document.createElement('div');
+    host.className = 'mhub-wp-bg__scene';
+    media.appendChild(host);
+    var token = ++sceneGeneration;
+    var currentId = mediaInfo.id;
+    setSceneStatus('preflight-project', '场景加载中 · 校验项目配置');
+    var session = window.__mhubWpScene.mount(host, mediaInfo, {
+      status: function (phase, detail) {
+        if (token !== sceneGeneration) return;
+        setSceneStatus(phase, '场景加载中 · ' + scenePhaseLabel(phase), detail);
+      },
+      ready: function () {
+        if (token !== sceneGeneration || !mediaInfo || mediaInfo.id !== currentId) return;
+        setSceneStatus('ready', '动态渲染中 · WebWallGL 已就绪');
+        uplink({ t: 'sceneStatus', payload: { level: 'info', phase: 'ready', id: currentId, message: currentId + ': WebWallGL ready，动态渲染中' } });
+        if (bgNode && bgNode.tagName === 'IMG') bgNode.style.visibility = 'hidden';
+      },
+      error: function (message, phase, detail) {
+        if (token !== sceneGeneration) return;
+        sceneSession = null;
+        if (bgNode && bgNode.tagName === 'IMG') bgNode.style.visibility = 'visible';
+        var label = scenePhaseLabel(phase);
+        var reason = String(message || '未知错误').slice(0, 160);
+        setSceneStatus('error', '已回退静态预览 · ' + label + '：' + reason, detail);
+        uplink({ t: 'sceneStatus', payload: {
+          level: 'error', phase: phase || 'mount', id: currentId,
+          url: detail && detail.url || '', status: detail && detail.status,
+          message: currentId + ': [' + (phase || 'mount') + '] ' + reason + '；已回退静态预览'
+        } });
+      },
+      diagnostic: function (message, level) {
+        if (level === 'warn') uplink({ t: 'sceneStatus', payload: { level: 'warn', id: currentId, message: currentId + ': ' + message } });
+      }
+    });
+    sceneSession = session && !session.destroyed ? session : null;
+    if (sceneSession) {
+      sceneSession.setFit(currentCrop().fit);
+      syncSceneVisibility();
+    }
+  }
+
+  function syncVideoVisibility() {
+    syncSceneVisibility();
+    if (!bgNode || bgNode.tagName !== 'VIDEO') return;
+    try {
+      if (document.hidden) bgNode.pause();
+      else {
+        var p = bgNode.play();
+        if (p && typeof p.catch === 'function') p.catch(function () { /* wait for gesture */ });
+      }
+    } catch (e) { /* ignore */ }
+  }
+
   function ensureBgState() {
     var active = !!(state.enabled && state.bgId && mediaInfo && mediaInfo.id === state.bgId);
     var host = bgHost();
     try {
       document.documentElement.classList.toggle('mhub-wp-on', !!active);
+      /* 覆盖开关只影响官方前景层，不改变壁纸本身的启停。 */
+      document.documentElement.classList.toggle('mhub-wp-cover', !!active && !!state.overlayOfficial);
     } catch (e) { /* ignore */ }
     if (!active || !host) {
       hideOfficial(false);
+      releaseBgNode();
       if (bgEl && bgEl.parentNode) bgEl.parentNode.removeChild(bgEl);
       bgEl = null;
-      bgNode = null;
       bgKey = '';
       return;
     }
     if (!bgEl || !bgEl.parentNode || bgEl.parentElement !== host) {
+      releaseBgNode();
       if (bgEl && bgEl.parentNode) bgEl.parentNode.removeChild(bgEl);
       bgEl = buildBg();
       /* 插到最前面，保证永远在页面内容之下；并强制整层不参与命中测试。 */
@@ -237,19 +445,20 @@
     var media = bgEl.querySelector('.mhub-wp-bg__media');
     if (key !== bgKey) {
       bgKey = key;
+      releaseBgNode();
       media.textContent = '';
-      bgNode = null;
       if (mediaInfo.kind === 'video' && mediaInfo.video) {
         var video = document.createElement('video');
         video.src = mediaInfo.video;
         video.muted = true;
         video.loop = true;
         video.autoplay = true;
-        video.preload = 'auto';
+        video.preload = 'metadata';
         video.setAttribute('playsinline', '');
         video.setAttribute('muted', '');
         video.setAttribute('disablepictureinpicture', '');
-        video.style.cssText = 'width:100%;height:100%;display:block;object-fit:cover;transform:translateZ(0);';
+        video.disableRemotePlayback = true;
+        video.style.cssText = 'width:100%;height:100%;display:block;object-fit:cover;';
         video.poster = mediaInfo.image;
         video.addEventListener('error', function () {
           if (bgNode === video) useImage(media);
@@ -262,8 +471,10 @@
         video.addEventListener('loadeddata', tryPlay);
         media.appendChild(video);
         bgNode = video;
+        syncVideoVisibility();
       } else {
         useImage(media);
+        if ((mediaInfo.kind === 'scene' || mediaInfo.kind === 'web') && mediaInfo.sceneBase) mountScene(media);
       }
     }
     applyBgStyles();
@@ -285,8 +496,11 @@
   }
 
   function useImage(media) {
-    if (!mediaInfo || !mediaInfo.image) return;
+    releaseBgNode();
     media.textContent = '';
+    media.style.background = '#05070c';
+    if (!mediaInfo || !mediaInfo.image) return;
+    media.style.background = '';
     ensureSharpenFilter();
     var img = document.createElement('img');
     img.alt = '';
@@ -342,6 +556,7 @@
     var crop = currentCrop();
     var fit = crop.fit;
     var position = crop.posX + '% ' + crop.posY + '%';
+    if (sceneSession) sceneSession.setFit(fit);
     if (bgNode && bgNode.tagName === 'IMG') {
       bgNode.style.objectFit = fit;
       bgNode.style.objectPosition = position;
@@ -359,7 +574,7 @@
       back.style.opacity = containMode ? '1' : '0';
     }
 
-    if (b.fit === 'tile' && mediaInfo && mediaInfo.image) {
+    if (b.fit === 'tile' && mediaInfo && mediaInfo.image && mediaInfo.kind !== 'scene' && mediaInfo.kind !== 'web') {
       media.style.backgroundImage = 'url("' + mediaInfo.image + '")';
       media.style.backgroundRepeat = 'repeat';
       media.style.backgroundSize = (b.scale / 100 * 100) + '% auto';
@@ -766,6 +981,184 @@
     }, 180);
   }
 
+  function sourceLabel(source) {
+    if (source === 'wegame') return 'WeGame';
+    if (source === 'manual') return '自定义';
+    return 'Steam';
+  }
+
+  function buildLibrarySection() {
+    var sec = el('div', 'mhub-wp-library');
+    var head = el('div', 'mhub-wp-section-head');
+    head.appendChild(el('div', 'mhub-wp-section-title', '壁纸来源'));
+    var actions = el('div', 'mhub-wp-section-actions');
+    var filter = document.createElement('select');
+    filter.className = 'mhub-wp-select mhub-wp-source-filter';
+    [['all', '全部来源'], ['steam', 'Steam'], ['wegame', 'WeGame'], ['manual', '自定义']].forEach(function (pair) {
+      var option = document.createElement('option');
+      option.value = pair[0];
+      option.textContent = pair[1];
+      filter.appendChild(option);
+    });
+    filter.addEventListener('change', function () {
+      panel.__libraryFilter = filter.value;
+      panelSig = '';
+      renderPanel();
+    });
+    var rescan = el('button', 'mhub-wp-btn mhub-wp-btn--ghost', '重扫');
+    rescan.type = 'button';
+    rescan.addEventListener('click', function () { uplink({ t: 'refresh' }); });
+    var add = el('button', 'mhub-wp-btn', '添加壁纸库');
+    add.type = 'button';
+    add.addEventListener('click', function () { uplink({ t: 'libraryChoose' }); });
+    actions.appendChild(filter);
+    actions.appendChild(rescan);
+    actions.appendChild(add);
+    head.appendChild(actions);
+    sec.appendChild(head);
+    var result = el('div', 'mhub-wp-library-result', '');
+    sec.appendChild(result);
+    var list = el('div', 'mhub-wp-library-list');
+    sec.appendChild(list);
+    sec.appendChild(el('div', 'mhub-wp-section-hint', '支持 Steam、WeGame 和手动目录；移除自定义来源只删除配置，不删除磁盘壁纸。'));
+    return { row: sec, list: list, result: result, filter: filter };
+  }
+
+  function renderLibraries() {
+    if (!panel || !panel.__refs || !panel.__refs.library) return;
+    var refs = panel.__refs.library;
+    var libraries = Array.isArray(state.libraries) ? state.libraries : [];
+    var sig = libraries.map(function (lib) {
+      return [lib.id, lib.enabled, lib.count, lib.truncated, lib.path].join(':');
+    }).join('|');
+    if (refs.list.__sig === sig) return;
+    refs.list.__sig = sig;
+    refs.list.textContent = '';
+    if (!libraries.length) {
+      refs.list.appendChild(el('div', 'mhub-wp-library-empty', '尚未检测到壁纸来源，可点击“添加壁纸库”手动选择。'));
+      return;
+    }
+    libraries.forEach(function (lib) {
+      var row = el('div', 'mhub-wp-library-row' + (lib.enabled ? '' : ' is-disabled'));
+      var info = el('div', 'mhub-wp-library-info');
+      var title = el('div', 'mhub-wp-library-title');
+      title.appendChild(el('span', 'mhub-wp-library-source', sourceLabel(lib.source)));
+      title.appendChild(el('span', 'mhub-wp-library-name', lib.label || lib.path));
+      title.appendChild(el('span', 'mhub-wp-library-count', (lib.count || 0) + ' 项' + (lib.truncated ? ' · 已达扫描上限' : '')));
+      info.appendChild(title);
+      info.appendChild(el('div', 'mhub-wp-library-path', lib.path));
+      info.title = lib.path;
+      row.appendChild(info);
+      var actions = el('div', 'mhub-wp-library-actions');
+      var toggle = el('button', 'mhub-wp-btn mhub-wp-btn--ghost', lib.enabled ? '停用' : '启用');
+      toggle.type = 'button';
+      toggle.addEventListener('click', function () {
+        uplink({ t: 'libraryUpdate', payload: { id: lib.id, enabled: !lib.enabled } });
+      });
+      actions.appendChild(toggle);
+      if (lib.source === 'manual') {
+        var remove = el('button', 'mhub-wp-btn mhub-wp-btn--danger', '移除');
+        remove.type = 'button';
+        remove.addEventListener('click', function () {
+          if (!window.confirm('仅从 M HUB 移除此壁纸库配置？磁盘中的壁纸不会被删除。')) return;
+          uplink({ t: 'libraryUpdate', payload: { id: lib.id, remove: true } });
+        });
+        actions.appendChild(remove);
+      }
+      row.appendChild(actions);
+      refs.list.appendChild(row);
+    });
+  }
+
+  function buildPlaybackSection() {
+    var sec = el('div', 'mhub-wp-playback');
+    var head = el('div', 'mhub-wp-section-head');
+    head.appendChild(el('div', 'mhub-wp-section-title', '播放与场景性能'));
+    sec.appendChild(head);
+    var grid = el('div', 'mhub-wp-playback-grid');
+
+    function selectRow(label, values, changed) {
+      var row = el('label', 'mhub-wp-playback-row');
+      row.appendChild(el('span', '', label));
+      var input = document.createElement('select');
+      input.className = 'mhub-wp-select';
+      values.forEach(function (pair) {
+        var option = document.createElement('option');
+        option.value = pair[0];
+        option.textContent = pair[1];
+        input.appendChild(option);
+      });
+      input.addEventListener('change', function () { changed(input.value); });
+      row.appendChild(input);
+      grid.appendChild(row);
+      return input;
+    }
+
+    var interval = selectRow('随机轮换间隔', [['5', '5 分钟'], ['15', '15 分钟'], ['30', '30 分钟'], ['60', '1 小时'], ['120', '2 小时']], function (value) {
+      uplink({ t: 'rotation', payload: { intervalMinutes: Number(value) } });
+    });
+    var scope = selectRow('轮换范围', [['all', '全部壁纸'], ['favorites', '仅收藏']], function (value) {
+      uplink({ t: 'rotation', payload: { scope: value } });
+    });
+    var performance = selectRow('场景性能档位', [['saver', '节能 · 15 FPS'], ['balanced', '均衡 · 30 FPS'], ['quality', '高画质 · 60 FPS']], function (value) {
+      uplink({ t: 'scenePerformance', payload: { preset: value } });
+    });
+
+    function toggleRow(label, changed) {
+      var row = el('label', 'mhub-wp-playback-toggle');
+      var input = document.createElement('input');
+      input.type = 'checkbox';
+      input.addEventListener('change', function () { changed(input.checked); });
+      row.appendChild(input);
+      row.appendChild(el('span', 'mhub-wp-switch__track'));
+      row.appendChild(el('span', '', label));
+      grid.appendChild(row);
+      return input;
+    }
+
+    var rotation = toggleRow('启用定时随机轮换', function (checked) {
+      uplink({ t: 'rotation', payload: { enabled: checked } });
+    });
+    var pauseHidden = toggleRow('窗口隐藏时暂停场景', function (checked) {
+      uplink({ t: 'scenePerformance', payload: { pauseWhenHidden: checked } });
+    });
+    var overlayOfficial = toggleRow('覆盖官方前景层（隐藏设备图标与名称）', function (checked) {
+      state.overlayOfficial = checked;
+      ensureBgState();
+      uplink({ t: 'overlayOfficial', payload: { enabled: checked } });
+    });
+    overlayOfficial.id = 'mhub-wp-overlay-official';
+    sec.appendChild(grid);
+    var sceneStatus = el('div', 'mhub-wp-section-hint mhub-wp-scene-status', '');
+    sceneStatus.style.display = 'none';
+    sec.appendChild(sceneStatus);
+    sec.appendChild(el('div', 'mhub-wp-section-hint', '默认保留官方设备图标、名称与电量；开启「覆盖官方前景层」后仅显示壁纸。场景由本地 WebWallGL 渲染，无法初始化的项目会保留静态预览。'));
+    return { row: sec, interval: interval, scope: scope, performance: performance, rotation: rotation, pauseHidden: pauseHidden, overlayOfficial: overlayOfficial, sceneStatus: sceneStatus };
+  }
+
+  function renderPlayback() {
+    if (!panel || !panel.__refs || !panel.__refs.playback) return;
+    var refs = panel.__refs.playback;
+    var rotation = state.rotation || {};
+    var performance = state.scenePerformance || {};
+    refs.rotation.checked = !!rotation.enabled;
+    refs.pauseHidden.checked = performance.pauseWhenHidden !== false;
+    refs.overlayOfficial.checked = !!state.overlayOfficial;
+    if (document.activeElement !== refs.interval) refs.interval.value = String(rotation.intervalMinutes || 30);
+    if (document.activeElement !== refs.scope) refs.scope.value = rotation.scope === 'favorites' ? 'favorites' : 'all';
+    if (document.activeElement !== refs.performance) refs.performance.value = performance.preset || 'balanced';
+    updateSceneStatus();
+  }
+
+  window.__mhubWpLibraryResult = function (result) {
+    if (!panel || !panel.__refs || !panel.__refs.library) return;
+    var node = panel.__refs.library.result;
+    node.textContent = result && result.message || '';
+    node.setAttribute('data-ok', result && result.ok ? '1' : '0');
+    clearTimeout(node.__timer);
+    node.__timer = setTimeout(function () { node.textContent = ''; }, 5000);
+  };
+
   function buildPanel() {
     var sec = el('section', 'mhub-wp-card');
     sec.id = 'mhub-wp-panel';
@@ -776,8 +1169,8 @@
     var mark = el('div', 'mhub-wp-mark');
     mark.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.6" cy="9" r="1.7"/><path d="M21 15.4 16.2 11 7 20"/></svg>';
     var titles = el('div', 'mhub-wp-titles');
-    titles.appendChild(el('h3', 'mhub-wp-title', 'M HUB 壁纸'));
-    titles.appendChild(el('p', 'mhub-wp-sub', 'Wallpaper Engine 本地库 · 仅改变 M HUB 界面背景 · 快捷键见下方'));
+    titles.appendChild(el('h3', 'mhub-wp-title', 'M HUB 壁纸 · v' + VERSION));
+    titles.appendChild(el('p', 'mhub-wp-sub', '作者：顾小颜 · Wallpaper Engine 本地库 · 仅改变 M HUB 界面背景'));
     brand.appendChild(mark);
     brand.appendChild(titles);
 
@@ -874,6 +1267,11 @@
     }
     sec.appendChild(hkSec);
 
+    var library = buildLibrarySection();
+    sec.appendChild(library.row);
+    var playback = buildPlaybackSection();
+    sec.appendChild(playback.row);
+
     var toolbar = el('div', 'mhub-wp-toolbar');
     var search = document.createElement('input');
     search.type = 'text';
@@ -934,7 +1332,8 @@
     panel = sec;
     panel.__refs = {
       status: status, search: search, chips: chips, count: count,
-      grid: grid, switchInput: switchInput, controls: controls, sels: sels, hotkeys: hkRefs
+      grid: grid, switchInput: switchInput, controls: controls, sels: sels, hotkeys: hkRefs,
+      library: library, playback: playback
     };
     panelSig = '';
     return sec;
@@ -1011,6 +1410,24 @@
     input.setAttribute('data-sp-key', key);
     input.addEventListener('change', function () {
       state.splash[key] = input.checked;
+      saveSplash();
+    });
+    row.appendChild(input);
+    row.appendChild(el('span', 'mhub-sp-switch__track'));
+    row.appendChild(el('span', 'mhub-sp-switch__text', label));
+    return { row: row, input: input };
+  }
+
+  /* 分阶段开关：直接读写 state.splash.stages[key]，不走扁平 data-sp-key 循环 */
+  function spStageSwitch(label, stage) {
+    var row = el('label', 'mhub-sp-switch');
+    var input = document.createElement('input');
+    input.type = 'checkbox';
+    input.setAttribute('data-sp-stage', stage);
+    input.addEventListener('change', function () {
+      if (!state.splash.stages || typeof state.splash.stages !== 'object')
+        state.splash.stages = { intro: true, setup: true, steps: true, welcome: true };
+      state.splash.stages[stage] = input.checked;
       saveSplash();
     });
     row.appendChild(input);
@@ -1165,6 +1582,18 @@
     body.appendChild(skip.row);
     body.appendChild(startMax.row);
 
+    /* 分阶段开关：可单独关闭任意段落 */
+    body.appendChild(spGroup('分阶段动画控制'));
+    var stageIntro = spStageSwitch('黑幕与洗白（序幕）', 'intro');
+    var stageSetup = spStageSwitch('品牌块 / 进度条（底板）', 'setup');
+    var stageSteps = spStageSwitch('五步访问授权', 'steps');
+    var stageWelcome = spStageSwitch('欢迎访问 M HUB 终幕', 'welcome');
+    refs.switches.push(stageIntro, stageSetup, stageSteps, stageWelcome);
+    body.appendChild(stageIntro.row);
+    body.appendChild(stageSetup.row);
+    body.appendChild(stageSteps.row);
+    body.appendChild(stageWelcome.row);
+
     /* 音效 */
     body.appendChild(spGroup('界面音效'));
     var sfx = spSwitch('界面音效', 'sfx');
@@ -1243,9 +1672,8 @@
     if (!splashPanel || !splashPanel.isConnected) return;
     var r = splashPanel.__refs;
     if (!r) return;
-    var theme = detectTheme();
+    var theme = syncControlTheme();
     splashPanel.setAttribute('data-wp-theme', theme);
-    try { splashPanel.style.setProperty('--wp-accent', accentColor()); } catch (e) { /* ignore */ }
 
     var s = state.splash;
     r.switchInput.checked = !!s.enabled;
@@ -1287,7 +1715,12 @@
     for (var c = 0; c < refs.switches.length; c++) {
       var sw = refs.switches[c];
       var wk = sw.input.getAttribute('data-sp-key');
-      sw.input.checked = !!s[wk];
+      var stg = sw.input.getAttribute('data-sp-stage');
+      if (wk) sw.input.checked = !!s[wk];
+      else if (stg) {
+        var st = s.stages || {};
+        sw.input.checked = st[stg] !== false;
+      }
     }
     for (var d = 0; d < refs.colors.length; d++) {
       var co = refs.colors[d];
@@ -1349,12 +1782,23 @@
     st.id = 'mhub-wp-css';
     st.textContent = [
       '#mhub-wp-bg,#mhub-wp-bg *{pointer-events:none !important;}',
+      /* 壁纸层压到宿主内容之下：只替换官方壁纸素材，不再隐藏设备图标、名称、电量等前景层。 */
+      'html.mhub-wp-on #mhub-wp-bg{z-index:-1 !important;}',
+      'html.mhub-wp-on .app-background,html.mhub-wp-on .wallpaper-background{background-color:transparent !important;background-image:none !important;}',
       /* 仅在壁纸生效时彻底隐藏官方壁纸容器，跟着路由重建也不会重新露出来。 */
       'html.mhub-wp-on .wallpaper-background:not(:has(#mhub-wp-bg)){display:none !important;}',
       'html.mhub-wp-on .wallpaper-background__scenes,html.mhub-wp-on .wallpaper-background__plane,' +
         'html.mhub-wp-on .wallpaper-background__media{display:none !important;}',
       'html.mhub-wp-on .app-background>img,html.mhub-wp-on .app-background>video,' +
         'html.mhub-wp-on .app-background>canvas{display:none !important;}',
+      /* 「覆盖官方前景层」开关：仅用户主动开启时，才隐藏宿主下除插件壁纸外的所有直接子层。
+         默认关闭，保证设备图标与名称等官方信息完整可见。 */
+      'html.mhub-wp-on.mhub-wp-cover .app-background>:not(#mhub-wp-bg),' +
+        'html.mhub-wp-on.mhub-wp-cover .wallpaper-background>:not(#mhub-wp-bg){display:none !important;}',
+      'html.mhub-wp-on.mhub-wp-cover .wallpaper-background:not(:has(#mhub-wp-bg)){display:none !important;}',
+      /* 官方在卡片 hover 时重建的纯背景 div 仍然需要隐藏，否则会盖住壁纸。 */
+      'html.mhub-wp-on .app-background>div[class*="background"]:not(#mhub-wp-bg):not(:has(*)),' +
+        'html.mhub-wp-on .app-background>div[class*="-bg"]:not(#mhub-wp-bg):not(:has(*)){display:none !important;}',
       '@keyframes mhubWpKen{from{transform:scale(var(--wp-scale,1))}to{transform:scale(calc(var(--wp-scale,1) * 1.08))}}',
       '@keyframes mhubWpBreathe{0%,100%{opacity:1}50%{opacity:.86}}',
       '.mhub-wp-card{--wp-fg:#eef3fb;--wp-sub:#adb9cc;--wp-line:rgba(255,255,255,.13);--wp-fill:rgba(11,15,24,.56);--wp-hover:rgba(255,255,255,.09);--wp-accent:' + accentColor() + ';box-sizing:border-box;width:100%;margin:4px 0 20px;padding:18px 18px 16px;border:1px solid var(--wp-line);border-radius:14px;background:var(--wp-fill);-webkit-backdrop-filter:blur(18px) saturate(125%);backdrop-filter:blur(18px) saturate(125%);box-shadow:0 10px 30px rgba(0,0,0,.18);color:var(--wp-fg);font:13px/1.5 "Segoe UI","Microsoft YaHei",sans-serif;}',
@@ -1409,6 +1853,38 @@
       '.mhub-wp-item:hover .mhub-wp-use{opacity:1;transform:none;}',
       '.mhub-wp-item.is-current .mhub-wp-use{opacity:1;transform:none;background:rgba(70,80,100,.7);}',
       '.mhub-wp-empty{grid-column:1/-1;padding:26px 12px;text-align:center;color:var(--wp-sub);font-size:12px;}',
+      '.mhub-wp-library,.mhub-wp-playback{margin:12px 0;padding:12px;border:1px solid var(--wp-line);border-radius:11px;background:var(--wp-hover);}',
+      '.mhub-wp-section-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;}',
+      '.mhub-wp-section-title{font-size:12px;font-weight:650;color:var(--wp-fg);}',
+      '.mhub-wp-section-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap;}',
+      '.mhub-wp-source-filter{width:112px;height:28px;}',
+      '.mhub-wp-section-hint{margin-top:8px;font-size:11px;line-height:1.6;color:var(--wp-sub);opacity:.78;}',
+      '.mhub-wp-library-result:empty{display:none;}',
+      '.mhub-wp-library-result{margin:0 0 8px;padding:7px 9px;border-radius:7px;background:rgba(70,170,110,.12);color:#75d99c;font-size:11px;}',
+      '.mhub-wp-library-result[data-ok="0"]{background:rgba(255,100,100,.1);color:#ff9d9d;}',
+      '.mhub-wp-library-list{display:flex;flex-direction:column;gap:6px;max-height:190px;overflow-y:auto;}',
+      '.mhub-wp-library-row{display:flex;align-items:center;gap:10px;padding:8px 9px;border:1px solid var(--wp-line);border-radius:8px;background:var(--wp-fill);}',
+      '.mhub-wp-library-row.is-disabled{opacity:.55;}',
+      '.mhub-wp-library-info{flex:1;min-width:0;}',
+      '.mhub-wp-library-title{display:flex;align-items:center;gap:7px;min-width:0;}',
+      '.mhub-wp-library-source{flex:none;padding:0 5px;border-radius:4px;background:var(--wp-hover);color:var(--wp-accent);font-size:10px;}',
+      '.mhub-wp-library-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--wp-fg);}',
+      '.mhub-wp-library-count{flex:none;font-size:10px;color:var(--wp-sub);}',
+      '.mhub-wp-library-path{margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:var(--wp-sub);}',
+      '.mhub-wp-library-actions{display:flex;gap:6px;flex:none;}',
+      '.mhub-wp-library-actions .mhub-wp-btn{height:25px;padding:0 9px;font-size:11px;}',
+      '.mhub-wp-library-empty{padding:12px;text-align:center;color:var(--wp-sub);font-size:11px;}',
+      '.mhub-wp-btn--danger{color:#ff9d9d;border-color:rgba(255,100,100,.28);}',
+      '.mhub-wp-playback-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px 16px;}',
+      '.mhub-wp-playback-row{display:grid;grid-template-columns:1fr 128px;align-items:center;gap:10px;min-height:30px;font-size:12px;color:var(--wp-sub);}',
+      '.mhub-wp-playback-toggle{display:flex;align-items:center;gap:8px;min-height:30px;cursor:pointer;font-size:12px;color:var(--wp-fg);}',
+      '.mhub-wp-playback-toggle input{position:absolute;opacity:0;width:0;height:0;}',
+      '.mhub-wp-playback-toggle input:checked + .mhub-wp-switch__track{background:var(--wp-accent);}',
+      '.mhub-wp-playback-toggle input:checked + .mhub-wp-switch__track::after{transform:translateX(16px);}',
+      '.mhub-wp-favorite{position:absolute;z-index:2;top:6px;right:6px;height:22px;padding:0 7px;border:1px solid rgba(255,255,255,.2);border-radius:6px;background:rgba(8,12,20,.7);color:#fff;font:10px/20px "Segoe UI","Microsoft YaHei",sans-serif;cursor:pointer;opacity:.82;}',
+      '.mhub-wp-favorite.is-favorite{background:var(--wp-accent);border-color:transparent;opacity:1;}',
+      '.mhub-wp-item:focus-visible .mhub-wp-thumb{outline:2px solid var(--wp-accent);outline-offset:2px;}',
+      '.mhub-wp-thumb.is-empty::before{content:"无静态预览";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--wp-sub);font-size:11px;}',
       '.mhub-sp-group{grid-column:1/-1;margin:16px 0 2px;padding-top:2px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--wp-sub);opacity:.85;}',
       '.mhub-sp-body{margin-top:4px;}',
       '.mhub-sp-hint{margin:10px 0 0;font-size:12px;color:var(--wp-sub);}',
@@ -1446,25 +1922,21 @@
     var refs = panel.__refs;
     if (!refs) return;
 
-    var theme = detectTheme();
-    if (theme !== appliedTheme) {
-      appliedTheme = theme;
-      panel.setAttribute('data-wp-theme', theme);
-      try {
-        panel.style.setProperty('--wp-accent', accentColor());
-      } catch (e) { /* ignore */ }
-    }
+    syncControlTheme();
 
     var cur = currentItem();
     var statusText;
     if (!state.bgId) statusText = '当前：使用 M HUB 官方背景';
     else if (!state.enabled) statusText = '当前：已暂停 M HUB 壁纸（' + (cur ? cur.title : '未知') + '）';
     else statusText = '当前：' + (cur ? cur.title : '已删除的壁纸') + ' · 仅作用于 M HUB 界面' +
-      (cur && cur.kind !== 'video' ? ' · 场景壁纸只有约 1K 预览图，放大会偏糊（视频壁纸更清晰）' : '');
+      (cur && (cur.kind === 'scene' || cur.kind === 'web') ? ' · 优先实时渲染，失败时回退静态预览' : '');
     refs.status.textContent = statusText;
     refs.switchInput.checked = !!state.enabled;
     refs.switchInput.disabled = !state.bgId;
     renderHotkeyRows(refs.hotkeys);
+    renderLibraries();
+    renderPlayback();
+    refs.library.filter.value = panel.__libraryFilter || 'all';
 
     for (var c = 0; c < refs.controls.length; c++) {
       var pair = refs.controls[c];
@@ -1481,20 +1953,31 @@
 
     var q = String(refs.search.value || '').trim().toLowerCase();
     var filter = panel.__filter || 'all';
+    var libraryFilter = panel.__libraryFilter || 'all';
+    var favorites = Array.isArray(state.favorites) ? state.favorites : [];
+    var recent = Array.isArray(state.recent) ? state.recent : [];
     var list = [];
     for (var i = 0; i < state.items.length; i++) {
       var it = state.items[i];
-      if (filter !== 'all' && it.type !== filter) continue;
+      if (libraryFilter !== 'all' && it.source !== libraryFilter) continue;
+      if (filter === 'favorites' && favorites.indexOf(it.id) < 0) continue;
+      else if (filter === 'recent' && recent.indexOf(it.id) < 0) continue;
+      else if (filter !== 'all' && filter !== 'favorites' && filter !== 'recent' && it.type !== filter) continue;
       if (q && String(it.title).toLowerCase().indexOf(q) < 0) continue;
       list.push(it);
     }
+    if (filter === 'recent') {
+      list.sort(function (a, b) { return recent.indexOf(a.id) - recent.indexOf(b.id); });
+    }
 
-    var counts = { all: state.items.length };
+    var counts = { all: state.items.length, favorites: 0, recent: 0 };
     for (var n = 0; n < state.items.length; n++) {
       var type = state.items[n].type || 'other';
       counts[type] = (counts[type] || 0) + 1;
+      if (favorites.indexOf(state.items[n].id) >= 0) counts.favorites++;
+      if (recent.indexOf(state.items[n].id) >= 0) counts.recent++;
     }
-    var defs = [['all', '全部'], ['scene', '场景'], ['video', '视频'], ['web', '网页'], ['application', '应用']];
+    var defs = [['all', '全部'], ['favorites', '收藏'], ['recent', '最近'], ['scene', '场景'], ['video', '视频'], ['web', '网页'], ['application', '应用']];
     var chipSig = defs.map(function (d) { return d[0] + ':' + (counts[d[0]] || 0); }).join(',') + '|' + filter;
     if (refs.chips.__sig !== chipSig) {
       refs.chips.__sig = chipSig;
@@ -1539,36 +2022,55 @@
   }
 
   function makeItem(item) {
-    var card = document.createElement('button');
-    card.type = 'button';
+    var card = document.createElement('div');
     card.className = 'mhub-wp-item' + (item.id === state.bgId ? ' is-current' : '');
     card.setAttribute('data-id', item.id);
-    card.title = item.title;
+    card.setAttribute('role', 'button');
+    card.tabIndex = 0;
+    card.title = item.title + ' · ' + sourceLabel(item.source);
 
     var thumb = el('span', 'mhub-wp-thumb');
     var img = document.createElement('img');
     img.alt = item.title;
     img.decoding = 'async';
+    img.loading = 'lazy';
     img.setAttribute('data-wp-thumb', item.id);
     img.addEventListener('load', function () { img.classList.add('loaded'); });
     img.addEventListener('error', function () {
-      if (thumbCache[item.id]) { img.src = thumbCache[item.id]; return; }
-      if (thumbAsked[item.id]) return;
-      thumbAsked[item.id] = true;
+      var cached = cachedThumb(item.id);
+      if (cached && img.src !== cached) { img.src = cached; return; }
+      if (!markThumbAsked(item.id)) return;
       uplink({ t: 'thumb', payload: { id: item.id } });
     });
-    if (thumbCache[item.id]) img.src = thumbCache[item.id];
-    else img.setAttribute('data-src', item.preview);
+    var initialThumb = cachedThumb(item.id);
+    if (initialThumb) img.src = initialThumb;
+    else if (item.thumb || item.preview) img.setAttribute('data-src', item.thumb || item.preview);
+    else { img.style.display = 'none'; thumb.classList.add('is-empty'); }
     thumb.appendChild(img);
     thumb.appendChild(el('span', 'mhub-wp-kind', item.typeLabel || '壁纸'));
     var use = el('span', 'mhub-wp-use', item.id === state.bgId ? '使用中' : '使用');
     thumb.appendChild(use);
+    var isFavorite = state.favorites.indexOf(item.id) >= 0;
+    var favorite = el('button', 'mhub-wp-favorite' + (isFavorite ? ' is-favorite' : ''), isFavorite ? '已收藏' : '收藏');
+    favorite.type = 'button';
+    favorite.setAttribute('aria-pressed', isFavorite ? 'true' : 'false');
+    favorite.addEventListener('click', function (event) {
+      event.stopPropagation();
+      var index = state.favorites.indexOf(item.id);
+      var next = index < 0;
+      if (next) state.favorites.push(item.id);
+      else state.favorites.splice(index, 1);
+      uplink({ t: 'favorite', payload: { id: item.id, favorite: next } });
+      panelSig = '';
+      renderPanel();
+    });
+    thumb.appendChild(favorite);
 
     card.appendChild(thumb);
     card.appendChild(el('span', 'mhub-wp-item__name', item.title));
-    card.appendChild(el('span', 'mhub-wp-item__meta', (item.tags && item.tags.length ? item.tags.join(' · ') : item.typeLabel) || '壁纸'));
+    card.appendChild(el('span', 'mhub-wp-item__meta', sourceLabel(item.source) + ' · ' + ((item.tags && item.tags.length ? item.tags.join(' · ') : item.typeLabel) || '壁纸')));
 
-    card.addEventListener('click', function () {
+    function activate() {
       state.bgId = item.id;
       state.enabled = true;
       mediaInfo = null;
@@ -1576,6 +2078,12 @@
       uplink({ t: 'set', payload: { id: item.id } });
       renderPanel();
       ensureBgState();
+    }
+    card.addEventListener('click', activate);
+    card.addEventListener('keydown', function (event) {
+      if (event.target !== card || (event.key !== 'Enter' && event.key !== ' ')) return;
+      event.preventDefault();
+      activate();
     });
     return card;
   }
@@ -1638,9 +2146,21 @@
 
   window.__mhubWpReceive = function (data) {
     if (!data) return;
+    state.version = data.version || VERSION;
+    state.author = data.author || '顾小颜';
     state.items = Array.isArray(data.items) ? data.items : [];
+    state.libraries = Array.isArray(data.libraries) ? data.libraries : [];
+    state.favorites = Array.isArray(data.favorites) ? data.favorites.slice() : [];
+    state.recent = Array.isArray(data.recent) ? data.recent.slice() : [];
+    if (data.rotation && typeof data.rotation === 'object') {
+      state.rotation = Object.assign({ enabled: false, intervalMinutes: 30, scope: 'all', lastRunAt: 0 }, data.rotation);
+    }
+    if (data.scenePerformance && typeof data.scenePerformance === 'object') {
+      state.scenePerformance = Object.assign({ preset: 'balanced', fps: 30, renderDpr: 1, videoTexScale: 0.75, pauseWhenHidden: true }, data.scenePerformance);
+    }
     state.bgId = data.bgId || '';
     state.enabled = !!data.enabled;
+    state.overlayOfficial = !!data.overlayOfficial;
     state.error = data.error || null;
     if (data.beautify && typeof data.beautify === 'object' && Date.now() - lastEditAt > 900) {
       for (var k in DEFAULT_BEAUTIFY) {
@@ -1667,15 +2187,42 @@
   };
 
   window.__mhubWpMedia = function (info) {
-    mediaInfo = info && info.image ? info : null;
-    bgKey = '';
+    var previous = mediaInfo;
+    var same = !!(previous && info && previous.id === info.id && previous.kind === info.kind && previous.sceneBase === info.sceneBase);
+    mediaInfo = info && (info.image || info.video || info.sceneBase) ? info : null;
+    if (!same) {
+      bgKey = '';
+      sceneRuntimeRequested = false;
+      destroyScene();
+    } else if (sceneSession && info) {
+      sceneSession.setPerformance(info.performance);
+      sceneSession.setFit(currentCrop().fit);
+      syncSceneVisibility();
+    }
     ensureBgState();
     if (panel && panel.isConnected) renderPanel();
   };
 
+  window.__mhubWpSceneRuntimeReady = function () {
+    sceneRuntimeRequested = false;
+    var isScene = !!(mediaInfo && (mediaInfo.kind === 'scene' || mediaInfo.kind === 'web') && mediaInfo.sceneBase);
+    if (!window.__mhubWpScene || !isScene || !state.enabled || state.bgId !== mediaInfo.id || sceneSession) return false;
+    var media = bgEl && bgEl.querySelector('.mhub-wp-bg__media');
+    if (!media) return false;
+    mountScene(media);
+    return true;
+  };
+
+  window.__mhubWpSceneRuntimeError = function (message) {
+    sceneRuntimeRequested = false;
+    if (mediaInfo && (mediaInfo.kind === 'scene' || mediaInfo.kind === 'web')) {
+      setSceneStatus('error', '已回退静态预览 · 渲染器加载失败：' + String(message || '未知错误').slice(0, 120));
+    }
+  };
+
   window.__mhubWpThumb = function (id, dataUrl) {
     if (!id || !dataUrl) return;
-    thumbCache[id] = dataUrl;
+    storeThumb(id, dataUrl);
     var nodes = document.querySelectorAll('img[data-wp-thumb="' + String(id).replace(/"/g, '\\"') + '"]');
     for (var i = 0; i < nodes.length; i++) {
       nodes[i].src = dataUrl;
@@ -1688,11 +2235,14 @@
   var timer = null;
   var observer = null;
   var syncQueued = false;
+  var syncTimer = null;
+  var selfTestTimer = null;
 
   function queueSync() {
     if (syncQueued) return;
     syncQueued = true;
-    setTimeout(function () {
+    syncTimer = setTimeout(function () {
+      syncTimer = null;
       syncQueued = false;
       try { syncPage(); } catch (e) { /* ignore */ }
       try { syncBackground(); } catch (e) { /* ignore */ }
@@ -1707,16 +2257,26 @@
       try { syncBackground(); } catch (e) { /* ignore */ }
     }, 900);
     if ('MutationObserver' in window) {
-      observer = new MutationObserver(queueSync);
-      observer.observe(document.body, { childList: true, subtree: true });
+      observer = new MutationObserver(function () {
+        /* 深色/浅色切换只改 class 或 data-theme，不会增删 DOM；
+           先立即换卡片配色，再按原逻辑同步页面结构。 */
+        try { syncControlTheme(); } catch (e) { /* ignore */ }
+        queueSync();
+      });
+      var themeAttrs = ['class', 'data-theme', 'theme', 'data-mode', 'data-color-scheme', 'value'];
+      observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: themeAttrs });
+      observer.observe(document.documentElement, { attributes: true, attributeFilter: themeAttrs });
     }
     /* 路由切换（hash / history）后立刻重新对齐背景，避免闪回官方壁纸。 */
     window.addEventListener('hashchange', queueSync);
     window.addEventListener('popstate', queueSync);
+    document.addEventListener('visibilitychange', syncVideoVisibility);
     listeners.push([window, 'hashchange', queueSync, false]);
     listeners.push([window, 'popstate', queueSync, false]);
+    listeners.push([document, 'visibilitychange', syncVideoVisibility, false]);
     uplink({ t: 'ready' });
-    setTimeout(function () {
+    selfTestTimer = setTimeout(function () {
+      selfTestTimer = null;
       var first = state.items[0];
       if (!first) { uplink({ t: 'selftest', items: 0, plane: !!bgHost() }); return; }
       var probe = new Image();
@@ -1728,6 +2288,17 @@
 
   function dispose() {
     if (timer) clearInterval(timer);
+    if (syncTimer) clearTimeout(syncTimer);
+    if (selfTestTimer) clearTimeout(selfTestTimer);
+    if (saveTimer) clearTimeout(saveTimer);
+    if (splashSaveTimer) clearTimeout(splashSaveTimer);
+    syncTimer = null;
+    selfTestTimer = null;
+    syncQueued = false;
+    sceneRuntimeRequested = false;
+    thumbCache.clear();
+    thumbAsked.clear();
+    thumbCacheChars = 0;
     if (nativeGuardTimer) clearInterval(nativeGuardTimer);
     if (nativeObserver) nativeObserver.disconnect();
     if (observer) observer.disconnect();
@@ -1738,7 +2309,8 @@
       try { l[0].removeEventListener(l[1], l[2], l[3]); } catch (e) { /* ignore */ }
     }
     listeners.length = 0;
-    hideOfficialMedia(false);
+    hideOfficial(false);
+    releaseBgNode();
     if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
     if (splashPanel && splashPanel.parentNode) splashPanel.parentNode.removeChild(splashPanel);
     if (bgEl && bgEl.parentNode) bgEl.parentNode.removeChild(bgEl);
@@ -1770,6 +2342,16 @@
     dispose: dispose,
     open: function () { try { location.hash = '#/setting'; } catch (e) { /* ignore */ } return true; },
     isOpen: function () { return !!(panel && panel.isConnected); },
+    memoryInfo: function () {
+      return {
+        thumbEntries: thumbCache.size,
+        thumbChars: thumbCacheChars,
+        thumbAsked: thumbAsked.size,
+        sceneRuntimeLoaded: !!window.__mhubWpScene,
+        sceneActive: window.__mhubWpScene ? window.__mhubWpScene.activeCount() : 0,
+        backgroundNodes: bgEl ? bgEl.querySelectorAll('img,video,canvas').length : 0
+      };
+    },
     state: function () { return state; }
   };
 })();

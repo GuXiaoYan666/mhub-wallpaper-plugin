@@ -115,7 +115,6 @@ function createContext() {
         weatherEnabled: !(config.weather && config.weather.enabled === false),
         netEnabled: !(config.net && config.net.enabled === false),
         diskEnabled: !(config.disk && config.disk.enabled === false),
-        pomodoroEnabled: !(config.pomodoro && config.pomodoro.enabled === false),
         lunarEnabled: !(config.lunar && config.lunar.enabled === false),
         batteryEnabled: !(config.battery && config.battery.enabled === false),
         countdownEnabled: config.countdownEnabled !== false,
@@ -128,73 +127,7 @@ function createContext() {
       lunar: (on && !(config.lunar && config.lunar.enabled === false)) ? lunarSnapshot() : null,
       battery: (on && !(config.battery && config.battery.enabled === false)) ? battery.snapshot() : null,
       countdowns: on ? countdownSnapshot() : null,
-      pomo: on ? pomoSnapshot() : null,
       error: env.error
-    };
-  }
-
-  // ---------- 番茄钟（主进程状态机，页面刷新不丢） ----------
-  const pomo = { phase: 'idle', running: false, endAt: 0, remainMs: 0, round: 0 };
-
-  function pomoWorkMs() {
-    const c = getConfig();
-    const m = c.pomodoro && Number(c.pomodoro.workMin);
-    return (m > 0 && m <= 180 ? m : 25) * 60 * 1000;
-  }
-  function pomoBreakMs() {
-    const c = getConfig();
-    const m = c.pomodoro && Number(c.pomodoro.breakMin);
-    return (m > 0 && m <= 60 ? m : 5) * 60 * 1000;
-  }
-
-  function pomoStart() {
-    if (pomo.running) return;
-    if (pomo.phase === 'idle' || pomo.phase === 'paused') {
-      if (pomo.phase === 'idle') pomo.remainMs = pomoWorkMs();
-      pomo.phase = 'work';
-      pomo.running = true;
-      pomo.endAt = Date.now() + pomo.remainMs;
-    }
-  }
-  function pomoPause() {
-    if (!pomo.running) return;
-    pomo.remainMs = Math.max(0, pomo.endAt - Date.now());
-    pomo.running = false;
-    pomo.phase = 'paused';
-  }
-  function pomoReset() {
-    pomo.phase = 'idle';
-    pomo.running = false;
-    pomo.remainMs = 0;
-    pomo.endAt = 0;
-    pomo.round = 0;
-  }
-  function pomoTick() {
-    if (!pomo.running) return;
-    const left = pomo.endAt - Date.now();
-    if (left > 0) { pomo.remainMs = left; return; }
-    if (pomo.phase === 'work') {
-      pomo.phase = 'break';
-      pomo.remainMs = pomoBreakMs();
-      pomo.endAt = Date.now() + pomo.remainMs;
-      pomo.round += 1;
-      logger.info('pomodoro work done, round=' + pomo.round + ' -> break');
-    } else if (pomo.phase === 'break') {
-      pomo.phase = 'idle';
-      pomo.running = false;
-      pomo.remainMs = 0;
-      logger.info('pomodoro break done -> idle');
-    }
-  }
-  function pomoSnapshot() {
-    return {
-      phase: pomo.phase,
-      running: pomo.running,
-      round: pomo.round,
-      remainSec: pomo.running ? Math.max(0, Math.ceil((pomo.endAt - Date.now()) / 1000))
-        : Math.max(0, Math.ceil((pomo.remainMs || 0) / 1000)),
-      workMin: Math.round(pomoWorkMs() / 60000),
-      breakMin: Math.round(pomoBreakMs() / 60000)
     };
   }
 
@@ -272,15 +205,6 @@ function createContext() {
         bridge.pushForced();
         break;
       }
-      case 'pomodoro': {
-        const act = msg.action;
-        if (act === 'start') pomoStart();
-        else if (act === 'pause') pomoPause();
-        else if (act === 'reset') pomoReset();
-        logger.info('pomodoro ' + act + ' -> ' + pomo.phase + ' (wc=' + wcId + ')');
-        bridge.pushForced();
-        break;
-      }
       case 'countdown': {
         const cfg = getConfig();
         let list = Array.isArray(cfg.countdowns) ? cfg.countdowns.slice() : [];
@@ -331,6 +255,14 @@ function createContext() {
     } catch (e) {
       return { x: Math.round(x), y: Math.round(y), width: w, height: h };
     }
+  }
+
+  function saveDesktopPosition(win) {
+    if (!win || win.isDestroyed()) return;
+    try {
+      const bb = win.getBounds();
+      stateMod.saveConfig({ desktopPos: { x: bb.x, y: bb.y } });
+    } catch (e) { /* ignore */ }
   }
 
   function createDesktopWindow(show) {
@@ -390,12 +322,18 @@ function createContext() {
     desktopWin.once('ready-to-show', reveal);
     setTimeout(reveal, 1200);
 
-    desktopWin.on('close', function (e) {
-      if (env.stopping) return;
-      e.preventDefault();
-      try { desktopWin.hide(); } catch (err) { /* ignore */ }
+    desktopWin.on('close', function () {
+      clearTimeout(desktopSaveTimer);
+      saveDesktopPosition(desktopWin);
+      /* 用户主动关闭时真正销毁 renderer；退出驱动则保留 desktopOpen 供下次恢复。 */
+      if (!env.stopping) {
+        try { stateMod.saveConfig({ desktopOpen: false }); } catch (e) { /* ignore */ }
+      }
     });
-    desktopWin.on('closed', function () { desktopWin = null; });
+    desktopWin.on('closed', function () {
+      clearTimeout(desktopSaveTimer);
+      desktopWin = null;
+    });
     desktopWin.on('moved', function () {
       if (!desktopWin || desktopWin.isDestroyed()) return;
       clearTimeout(desktopSaveTimer);
@@ -419,8 +357,12 @@ function createContext() {
   }
 
   function hideDesktopWindow() {
-    try { if (desktopWin && !desktopWin.isDestroyed()) desktopWin.hide(); } catch (e) { /* ignore */ }
+    const win = desktopWin;
+    clearTimeout(desktopSaveTimer);
+    saveDesktopPosition(win);
     try { stateMod.saveConfig({ desktopOpen: false }); } catch (e) { /* ignore */ }
+    try { if (win && !win.isDestroyed()) win.destroy(); } catch (e) { /* ignore */ }
+    if (desktopWin === win) desktopWin = null;
   }
 
   function toggleDesktopWindow() {
@@ -493,7 +435,6 @@ function createContext() {
       weather.refresh(false, { location: getConfig().weatherCity || '' });
     }, 'weather'), 60000));
     env.timers.push(setInterval(safe(pushLoop, 'push loop'), 1000));
-    env.timers.push(setInterval(safe(function () { try { pomoTick(); } catch (e) { /* ignore */ } }, 'pomodoro tick'), 1000));
     env.timers.push(setInterval(safe(function () {
       try { stateMod.writeStatus({ v: 1, plugin: 'sysdeck', version: version }); } catch (e) { /* ignore */ }
     }, 'status heartbeat'), STATUS_HEARTBEAT_MS));

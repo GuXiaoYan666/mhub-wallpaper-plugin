@@ -114,6 +114,14 @@ const CATALOG = [
     paths: ['%APPDATA%\\Spotify\\Spotify.exe', '%LOCALAPPDATA%\\Spotify\\Spotify.exe'],
   },
   {
+    id: 'applemusic',
+    name: 'Apple Music',
+    match: /apple\s*music/i,
+    proc: ['AppleMusic.exe'],
+    exe: ['AppleMusic.exe'],
+    store: true,
+  },
+  {
     id: 'folia',
     name: 'Folia',
     match: /folia/i,
@@ -154,12 +162,12 @@ const CATALOG = [
     ],
   },
 ];
-const GENERIC_MUSIC_RE = /音乐|music player|groove|spotify|foobar|aimp|musicbee|kuwo|酷我|洛雪|落雪|lxmusic|migu|咪咕|qianqian|千千/i;
+const GENERIC_MUSIC_RE = /音乐|music player|apple\s*music|groove|spotify|foobar|aimp|musicbee|kuwo|酷我|洛雪|落雪|lxmusic|migu|咪咕|qianqian|千千/i;
 const NOT_PLAYER_RE = /卸载|uninstall|driver|驱动|update|升级|sdk|codec|firmware|repaire|修复|运行库|runtime/i;
 const INSTALLER_EXE_RE = /^(unins|uninstall|setup|install|update|upgrade)/i;
 const PROC_SKIP_RE = /^(chrome|msedge|firefox|brave|opera|vivaldi|iexplore|webviewhost|mchose|electron|node|powershell|pwsh|conhost|cmd|explorer|rundll32|svchost|java|python|code)$/i;
 const PROC_HELPER_RE = /(update|upgrade|helper|crash|report|service|setup|install|uninst|elevat|renderer|gpu|utility|cef|daemon|watchdog|launcher|proxy)/i;
-const PROC_PLAYER_RE = /music|player|音乐|播放|cloudmusic|kugou|kuwo|qqmusic|netease|soda|spotify|foobar|aimp|musicbee|groove|tidal|deezer|lx[-_ ]?music|migu|qianqian|baidumusic|bilibili|哔哩|folia|mineradio/i;
+const PROC_PLAYER_RE = /music|player|音乐|播放|apple\s*music|cloudmusic|kugou|kuwo|qqmusic|netease|soda|spotify|foobar|aimp|musicbee|groove|tidal|deezer|lx[-_ ]?music|migu|qianqian|baidumusic|bilibili|哔哩|folia|mineradio/i;
 function E(code, message, details) {
   const error = { code, message };
   if (details && typeof details === 'object') error.details = details;
@@ -360,6 +368,41 @@ async function readStartMenuTargets() {
   }
   return { ok: r.ok || targets.length > 0, targets: targets, error: r.ok ? null : r.error };
 }
+const APPX_SCRIPT = [
+  "$ProgressPreference = 'SilentlyContinue'",
+  '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
+  "Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '(?i)apple.*music' } | ForEach-Object {",
+  '  $package = $_',
+  '  $manifest = $null',
+  '  try { $manifest = Get-AppxPackageManifest -Package $package.PackageFullName -ErrorAction Stop } catch { }',
+  '  if ($manifest) {',
+  '    foreach ($app in @($manifest.Package.Applications.Application)) {',
+  '      if (-not $app.Id) { continue }',
+  "      'APPX:' + (@{",
+  '        name=[string]$package.Name',
+  '        packageFamilyName=[string]$package.PackageFamilyName',
+  '        installLocation=[string]$package.InstallLocation',
+  '        version=[string]$package.Version',
+  '        appId=[string]$app.Id',
+  '        executable=[string]$app.Executable',
+  '      } | ConvertTo-Json -Compress)',
+  '    }',
+  '  }',
+  '}',
+].join('\n');
+async function readAppxPackages() {
+  const r = await runPowerShell(APPX_SCRIPT, 30000);
+  const packages = [];
+  for (const line of String(r.stdout || '').split(/\r?\n/)) {
+    const text = line.trim();
+    if (text.indexOf('APPX:') !== 0) continue;
+    try {
+      const entry = JSON.parse(text.slice(5));
+      if (entry && entry.packageFamilyName && entry.appId) packages.push(entry);
+    } catch {}
+  }
+  return { ok: r.ok || packages.length > 0, packages: packages, error: r.ok ? null : r.error };
+}
 function findInDir(dir, names, maxDepth) {
   const depthLimit = typeof maxDepth === 'number' ? maxDepth : 2;
   const queue = [{ dir: dir, depth: 0 }];
@@ -387,6 +430,35 @@ function findInDir(dir, names, maxDepth) {
 }
 function specById(id) {
   return CATALOG.find((s) => s.id === id) || null;
+}
+function normalizeSessionId(value) {
+  let key = String(value == null ? '' : value).trim().toLowerCase();
+  const bang = key.lastIndexOf('!');
+  if (bang >= 0) key = key.slice(bang + 1);
+  key = key.split(/[\\/]/).pop();
+  return slugify(key);
+}
+function sessionMatchesPlayer(sessionId, player) {
+  const raw = String(sessionId || '').trim();
+  if (!raw || !player) return false;
+  const spec = specById(player.id);
+  if (spec && spec.match.test(raw)) return true;
+  const rawKey = raw.toLowerCase().replace(/\.exe$/, '');
+  const rawExe = String(player.exe || '').toLowerCase().split(/[\\/]/).pop().replace(/\.exe$/, '');
+  if (rawExe && (rawExe.indexOf(rawKey) >= 0 || rawKey.indexOf(rawExe) >= 0)) return true;
+  const sessionKey = normalizeSessionId(raw);
+  if (!sessionKey) return false;
+  const aliases = [player.id, player.name, player.exe, player.packageFamilyName, player.appId];
+  if (spec) aliases.push(...spec.proc, ...spec.exe);
+  for (const alias of aliases) {
+    if (!alias) continue;
+    const aliasRaw = String(alias).trim();
+    if (aliasRaw.toLowerCase() === raw.toLowerCase()) return true;
+    const aliasKey = normalizeSessionId(aliasRaw);
+    if (aliasKey && aliasKey === sessionKey) return true;
+  }
+  const exeKey = normalizeSessionId(player.exe);
+  return !!exeKey && (exeKey.indexOf(sessionKey) >= 0 || sessionKey.indexOf(exeKey) >= 0);
 }
 function resolveExe(input) {
   const baseExe = input.baseExe;
@@ -472,6 +544,33 @@ function playerFromWhitelist(spec, rawPath) {
     installDir: path.resolve(path.dirname(exe)),
     version: null,
     source: 'whitelist',
+  };
+}
+function playerFromStorePackage(entry) {
+  if (!entry) return null;
+  const packageFamilyName = String(entry.packageFamilyName || '').trim();
+  const installDir = String(entry.installLocation || '').trim();
+  const appId = String(entry.appId || '').trim();
+  const declaredExe = String(entry.executable || '').trim();
+  const spec = CATALOG.find(
+    (s) => s.store && (s.match.test(String(entry.name || '')) || s.match.test(packageFamilyName))
+  );
+  if (!spec || !packageFamilyName || !installDir || !appId) return null;
+  const appMatches =
+    spec.match.test(appId) ||
+    spec.exe.some((n) => n.toLowerCase() === path.basename(declaredExe).toLowerCase());
+  if (!appMatches) return null;
+  const exeName = declaredExe || spec.exe[0];
+  return {
+    id: spec.id,
+    name: spec.name,
+    exe: path.resolve(installDir, exeName),
+    installDir: path.resolve(installDir),
+    version: entry.version || null,
+    source: 'store',
+    packageFamilyName: packageFamilyName,
+    appId: appId,
+    launchTarget: 'shell:AppsFolder\\' + packageFamilyName + '!' + appId,
   };
 }
 let procCache = { at: 0, map: new Map(), ok: false, error: null };
@@ -712,7 +811,7 @@ function childEnv() {
   for (const key of SPAWN_ENV_DROP) delete env[key];
   return env;
 }
-function spawnDetached(exe) {
+function spawnDetached(exe, args) {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (v) => {
@@ -723,13 +822,14 @@ function spawnDetached(exe) {
     };
     let child;
     try {
-      child = spawn(exe, [], {
-        cwd: path.dirname(exe),
+      const options = {
         detached: true,
         stdio: 'ignore',
         windowsHide: false,
         env: childEnv(),
-      });
+      };
+      if (path.isAbsolute(exe)) options.cwd = path.dirname(exe);
+      child = spawn(exe, Array.isArray(args) ? args : [], options);
     } catch (e) {
       finish({ ok: false, error: errMsg(e) });
       return;
@@ -790,13 +890,15 @@ let scanInflight = null;
 let unknownProbeAt = 0;
 async function discoverPlayers() {
   const warnings = [];
-  const both = await Promise.all([readUninstallEntries(), readStartMenuTargets(), readProcessPaths()]);
-  const reg = both[0];
-  const lnk = both[1];
-  const procs = both[2];
+  const sources = await Promise.all([readUninstallEntries(), readStartMenuTargets(), readProcessPaths(), readAppxPackages()]);
+  const reg = sources[0];
+  const lnk = sources[1];
+  const procs = sources[2];
+  const store = sources[3];
   if (!reg.ok) warnings.push('registry: ' + (reg.error || 'unavailable'));
   if (!lnk.ok) warnings.push('shortcuts: ' + (lnk.error || 'unavailable'));
   if (!procs.ok) warnings.push('processes: ' + (procs.error || 'unavailable'));
+  if (!store.ok) warnings.push('store: ' + (store.error || 'unavailable'));
   const found = [];
   for (const entry of reg.entries) {
     try {
@@ -824,6 +926,14 @@ async function discoverPlayers() {
       }
     }
   }
+  for (const entry of store.packages) {
+    try {
+      const p = playerFromStorePackage(entry);
+      if (p) found.push(p);
+    } catch (e) {
+      warnings.push('store entry skipped: ' + errMsg(e));
+    }
+  }
   for (const proc of procs.list) {
     try {
       const p = playerFromProcess(proc);
@@ -832,12 +942,11 @@ async function discoverPlayers() {
       warnings.push('process skipped: ' + errMsg(e));
     }
   }
-  const rank = { registry: 0, shortcut: 1, whitelist: 2, process: 3 };
+  const rank = { store: 0, registry: 1, shortcut: 2, whitelist: 3, process: 4 };
   const byId = new Map();
   const byExe = new Set();
   for (const p of found) {
     const exeKey = p.exe.toLowerCase();
-    if (byExe.has(exeKey)) continue;
     const existing = byId.get(p.id);
     if (existing) {
       if (rank[p.source] < rank[existing.source]) {
@@ -846,6 +955,7 @@ async function discoverPlayers() {
       }
       continue;
     }
+    if (byExe.has(exeKey)) continue;
     byId.set(p.id, p);
     byExe.add(exeKey);
   }
@@ -857,7 +967,7 @@ async function discoverPlayers() {
     const wb = ib === -1 ? 99 : ib;
     return wa - wb || a.name.localeCompare(b.name);
   });
-  return { players: players, warnings: warnings, regOk: reg.ok, lnkOk: lnk.ok };
+  return { players: players, warnings: warnings, regOk: reg.ok, lnkOk: lnk.ok, storeOk: store.ok };
 }
 async function scanPlayers(opts) {
   if (scanInflight) return scanInflight;
@@ -877,7 +987,7 @@ async function scanPlayersOnce(opts) {
       const discovered = await discoverPlayers();
       players = discovered.players.map((p) => ({ ...p }));
       warnings = discovered.warnings;
-      if (!discovered.regOk && !discovered.lnkOk && players.length === 0) {
+      if (!discovered.regOk && !discovered.lnkOk && !discovered.storeOk && players.length === 0) {
         return E('SCAN_FAILED', 'no player source available', { warnings: warnings });
       }
       scanState = { at: Date.now(), players: players.map((p) => ({ ...p })) };
@@ -1019,15 +1129,19 @@ async function launch(id) {
       }
       return result;
     }
-    const candidates = launchCandidates(player);
+    const storeTarget = player.launchTarget || null;
+    const candidates = storeTarget ? [storeTarget] : launchCandidates(player);
     if (!candidates.length) {
       return E('EXE_MISSING', 'no launchable executable for ' + player.id, { id: player.id, exe: player.exe });
     }
+    const explorer = path.join(process.env.WINDIR || process.env.SystemRoot || 'C:\\Windows', 'explorer.exe');
     const failures = [];
-    for (const exe of candidates) {
-      const spawned = await spawnDetached(exe);
+    for (const candidate of candidates) {
+      const spawned = storeTarget
+        ? await spawnDetached(explorer, [candidate])
+        : await spawnDetached(candidate);
       if (!spawned.ok) {
-        failures.push({ exe: exe, error: spawned.error });
+        failures.push({ exe: candidate, error: spawned.error });
         continue;
       }
       const detected = await waitForProcess(player, CFG.spawnWaitMs);
@@ -1036,14 +1150,15 @@ async function launch(id) {
           ok: true,
           action: 'spawned',
           pid: detected.pid,
-          exe: exe,
+          exe: storeTarget ? player.exe : candidate,
           spawnPid: spawned.pid,
           verified: true,
         };
+        if (storeTarget) result.launchTarget = candidate;
         if (detected.pids.length > 1) result.pids = detected.pids;
         return result;
       }
-      failures.push({ exe: exe, error: 'process did not appear within ' + CFG.spawnWaitMs + 'ms' });
+      failures.push({ exe: candidate, error: 'process did not appear within ' + CFG.spawnWaitMs + 'ms' });
     }
     return E('SPAWN_FAILED', 'could not start ' + player.name, { id: player.id, attempts: failures });
   } catch (e) {
@@ -1056,6 +1171,7 @@ module.exports = {
   isRunning: isRunning,
   launch: launch,
   refreshRunning: refreshRunning,
+  sessionMatchesPlayer: sessionMatchesPlayer,
   __internal: {
     CATALOG: CATALOG,
     ICON_DIR: ICON_DIR,
@@ -1071,6 +1187,9 @@ module.exports = {
     resolveExe: resolveExe,
     playerFromRegistryEntry: playerFromRegistryEntry,
     playerFromShortcut: playerFromShortcut,
+    playerFromStorePackage: playerFromStorePackage,
+    normalizeSessionId: normalizeSessionId,
+    sessionMatchesPlayer: sessionMatchesPlayer,
     procNamesFor: procNamesFor,
     snapshotProcesses: snapshotProcesses,
     matchPids: matchPids,

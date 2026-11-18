@@ -1,0 +1,352 @@
+{
+    "name":  "pet-hub",
+    "version":  "1.0.12",
+    "build":  "20261102.4",
+    "builtAt":  "2026-11-02T05:42:14.621Z",
+    "builtFrom":  "pet-hub",
+    "host":  {
+                 "entry":  "resources/app/out/main/index.js",
+                 "moduleDir":  "resources/app/pet-hub"
+             },
+    "payload":  {
+                    "fileCount":  61,
+                    "bytes":  4056355
+                },
+    "files":  [
+                  {
+                      "path":  "detect-mhub.ps1",
+                      "bytes":  19755,
+                      "sha256":  "431ab94324f83de43e34d325b51e00e63b9d31b9ddbf47cc4b4047ab73243f3f"
+                  },
+                  {
+                      "path":  "payload/BUILD.json",
+                      "bytes":  98,
+                      "sha256":  "5c0a08a92797300579f9c183e7e7755c634c97ff6bdc3ee79f90a8c183bdbefe"
+                  },
+                  {
+                      "path":  "payload/CHANGELOG.md",
+                      "bytes":  4677,
+                      "sha256":  "c48f82a556f8a19a99839c8b17446260edf50b200d871386cd6e3973c8a378f3"
+                  },
+                  {
+                      "path":  "payload/index.js",
+                      "bytes":  72864,
+                      "sha256":  "a2d311d4c7856194344a878445230147d1be9ed7b88364642e6eafc8ac7b5d20"
+                  },
+                  {
+                      "path":  "payload/lib/config.js",
+                      "bytes":  18543,
+                      "sha256":  "c48f8923d76bcf5849d0023e49100dcf2d1a2864869585ea360ab22862c74899"
+                  },
+                  {
+                      "path":  "payload/lib/device-events.js",
+                      "bytes":  19283,
+                      "sha256":  "6e28f449f95111c7d2ddc1541e086f0f7ae50491d3656ada7661a9fcd6c010f5"
+                  },
+                  {
+                      "path":  "payload/lib/device-ipc.js",
+                      "bytes":  3915,
+                      "sha256":  "6f9e2dc22b059a87cd1a62bd80341bead04ab0ef6b6f116d0d3e1817c7a533d5"
+                  },
+                  {
+                      "path":  "payload/lib/device-source.js",
+                      "bytes":  13519,
+                      "sha256":  "968bcd3a81ae6cb93ad6ddbf7b96f81709248b22e0ee7314e469ae505ecb284a"
+                  },
+                  {
+                      "path":  "payload/lib/friend-backup.js",
+                      "bytes":  7223,
+                      "sha256":  "48040fbc02ce5dd6b6a0fdab49c40331c53a5e5646e693dd014aabf90e38f748"
+                  },
+                  {
+                      "path":  "payload/lib/fullscreen-watch.js",
+                      "bytes":  9231,
+                      "sha256":  "37c64d8e2f6a39adab6f820b27b41581dc51913b4430534fc359cb1e713683b1"
+                  },
+                  {
+                      "path":  "payload/lib/growth.js",
+                      "bytes":  4749,
+                      "sha256":  "8fa4e7d3da221d221d136d547a350c9d4e1225ead1843d645f784d06fb613cd7"
+                  },
+                  {
+                      "path":  "payload/lib/hd-cache.js",
+                      "bytes":  7558,
+                      "sha256":  "efaea44a71c2e748e717bae32994cf757535cac27f5ace30775fd98c18fff37f"
+                  },
+                  {
+                      "path":  "payload/lib/host-audio.js",
+                      "bytes":  7611,
+                      "sha256":  "367be515cf833d630958fd951e69be69f22ebcd268870aa6ea8ea82226b8f6b7"
+                  },
+                  {
+                      "path":  "payload/lib/host-channel.js",
+                      "bytes":  3613,
+                      "sha256":  "4e6d892eef3aba1118a0b200527ce6801786b24eaaa50bbe83b812c1398ae582"
+                  },
+                  {
+                      "path":  "payload/lib/host-state.js",
+                      "bytes":  4874,
+                      "sha256":  "e080fbee85074c84862711a26d00ca538ada844eca64a18733d3f08526bf7a50"
+                  },
+                  {
+                      "path":  "payload/lib/host-tips.js",
+                      "bytes":  7400,
+                      "sha256":  "3b4bfd518dd58336f309538d30f0424e5ca66b7bd1a8333faf53820be6eafa95"
+                  },
+                  {
+                      "path":  "payload/lib/hotkey.js",
+                      "bytes":  2726,
+                      "sha256":  "d76f58266f06c13f5f966731c450bea29cedf4f84dc514e8ed4b2d907a92b641"
+                  },
+                  {
+                      "path":  "payload/lib/image-size.js",
+                      "bytes":  2538,
+                      "sha256":  "15f8fbce072dacd8a204dfda1fa70e200b61d4fa592d73017cb1c5cf0854563a"
+                  },
+                  {
+                      "path":  "payload/lib/image-validator.js",
+                      "bytes":  1793,
+                      "sha256":  "2d88b2c12f3c401dea618276b464ecb43890a1e33114657b4f99ffd3be6d5498"
+                  },
+                  {
+                      "path":  "payload/lib/inline-page.js",
+                      "bytes":  11436,
+                      "sha256":  "6b24f0222a4535cc3229fbac80e8088b2c6c1c1ac61f9a2f2b00765ebd02fa79"
+                  },
+                  {
+                      "path":  "payload/lib/input.js",
+                      "bytes":  5842,
+                      "sha256":  "759aac40112f1f6b6c3cccf385bcead61c7f821f52faefe929bb08933f7f7ab2"
+                  },
+                  {
+                      "path":  "payload/lib/ipc.js",
+                      "bytes":  1152,
+                      "sha256":  "fb9b1cade547e7c30dd79b8b2dab41213dc872f2468bce21f29f4cbc9a521c41"
+                  },
+                  {
+                      "path":  "payload/lib/logger.js",
+                      "bytes":  7661,
+                      "sha256":  "29d787744e6bf21fc9efb1fc254ba4e5b653d6ae3ac6ccbcf63ef46332653654"
+                  },
+                  {
+                      "path":  "payload/lib/page-entry.js",
+                      "bytes":  112755,
+                      "sha256":  "1c01f3311949d0bb499747c7f314dd47f6e35ff29e5e7eb272beb6604d11128c"
+                  },
+                  {
+                      "path":  "payload/lib/page-transition.js",
+                      "bytes":  9029,
+                      "sha256":  "a57bf832315fd01360263ec466be76213d38ea04e1178d43826a0c6de02e2235"
+                  },
+                  {
+                      "path":  "payload/lib/page-view.js",
+                      "bytes":  26895,
+                      "sha256":  "8f9aebcc95a1e9e675329edfca6db5816cc92e1981a1a5ae184ec4e60552999a"
+                  },
+                  {
+                      "path":  "payload/lib/pet-download.js",
+                      "bytes":  5522,
+                      "sha256":  "503be63debc7532e3c5675bc9143868f6c503ba07723402e95a9558ebd1d36f3"
+                  },
+                  {
+                      "path":  "payload/lib/pet-library.js",
+                      "bytes":  10595,
+                      "sha256":  "6bff4336a33d73465fc3816a3b2f5701a1173ad6af084c141e11e66f701b7ea5"
+                  },
+                  {
+                      "path":  "payload/lib/pet-roam.js",
+                      "bytes":  28851,
+                      "sha256":  "810fda5e4f22793e708d2c9706a59066729c66cb5de45c035c2dfd4570b4d9cf"
+                  },
+                  {
+                      "path":  "payload/lib/pets.js",
+                      "bytes":  5721,
+                      "sha256":  "239ca34bcbfc2e3286187238a816a70647b6ca8b5442e301143530ff02e27ac6"
+                  },
+                  {
+                      "path":  "payload/lib/pet-sources.js",
+                      "bytes":  3235,
+                      "sha256":  "59e93c4fafb245bd2c336965f35f0f97329d0b696358864b06fff6e11bb6d762"
+                  },
+                  {
+                      "path":  "payload/lib/pet-window.js",
+                      "bytes":  28542,
+                      "sha256":  "0b14e8c7ff4c254565c2d9ff8ae4c47c6568b925c1c165e10b055f9bb94cec8a"
+                  },
+                  {
+                      "path":  "payload/lib/tray.js",
+                      "bytes":  4931,
+                      "sha256":  "52440991a856d4016f789718472f4b0d99a56598dca4c0ddf608bcd588272ab3"
+                  },
+                  {
+                      "path":  "payload/pets/bai-yuekui/pet.json",
+                      "bytes":  206,
+                      "sha256":  "c8351d8da43a742b8af9ccb9cb218ce3f545a10b66409aa754e0562f02ebc488"
+                  },
+                  {
+                      "path":  "payload/pets/bai-yuekui/spritesheet.webp",
+                      "bytes":  1172768,
+                      "sha256":  "4f0cfc5b02c61ea7a82c2f8d02d4ed2a3d03e42116b8a2f46ef57cd5a3bb7bf7"
+                  },
+                  {
+                      "path":  "payload/pets/guga/pet.json",
+                      "bytes":  312,
+                      "sha256":  "7188a54f5a237d63b88aaa1fbeedafae1a16bf7c38b8999978e569957a0706d0"
+                  },
+                  {
+                      "path":  "payload/pets/guga/spritesheet.webp",
+                      "bytes":  1945586,
+                      "sha256":  "1b61ea2af98717b9ebe55beb4c6b820b89e9c42d4fdfeca21cf63ed3ad4e38da"
+                  },
+                  {
+                      "path":  "payload/README.md",
+                      "bytes":  15412,
+                      "sha256":  "243a5dbe03c7041e88b6b6c493effa279d8ce772817cda6ed961392de0ad0139"
+                  },
+                  {
+                      "path":  "payload/renderer/pet/index.html",
+                      "bytes":  749,
+                      "sha256":  "265fa770f61a612afbdcc3ccf4f4d6fe47ea00feb238889e03bfd446bdcb9ca6"
+                  },
+                  {
+                      "path":  "payload/renderer/pet/pet.css",
+                      "bytes":  860,
+                      "sha256":  "b0e93ce8821de14f4c02031983c46a1fa65a3b3ef0cb69361a7f2ebc4e2b9f38"
+                  },
+                  {
+                      "path":  "payload/renderer/pet/pet.js",
+                      "bytes":  84660,
+                      "sha256":  "0405c26e39f4d8e1f7226eacaa81d3655a441669613cd140185f4e7b056305de"
+                  },
+                  {
+                      "path":  "payload/renderer/pet/pet-behavior.js",
+                      "bytes":  15306,
+                      "sha256":  "722f2af98f1ba221ee58ce3000aff7b29d606566efa18a81dd0135cb4ed59ca1"
+                  },
+                  {
+                      "path":  "payload/renderer/pet/pet-bubble.js",
+                      "bytes":  13514,
+                      "sha256":  "059d93a48845723117e2bfb16fd5dfc28a5946febc895677a3b1d7fc105e4749"
+                  },
+                  {
+                      "path":  "payload/renderer/pet/pet-fx.js",
+                      "bytes":  15381,
+                      "sha256":  "3bea6ed1e1d525eff35f226dfc141179a6b31b2ca7db1a9f95162410ed914bb6"
+                  },
+                  {
+                      "path":  "payload/renderer/pet/pet-hd.js",
+                      "bytes":  12535,
+                      "sha256":  "e2d5ddb1692ccee68267056c1f958f650896249f99d87425f4d94d0c43864d3e"
+                  },
+                  {
+                      "path":  "payload/renderer/pet/pet-motion.js",
+                      "bytes":  8641,
+                      "sha256":  "6ff5947ccf20cc90becd29dc1fb5390871b6034d901ff7e75255e0225d638035"
+                  },
+                  {
+                      "path":  "payload/renderer/settings/assets/friends.svg",
+                      "bytes":  3351,
+                      "sha256":  "948b3e5c6ed4431d4d566b408e00b7b207c0dd0aab04320e2ce9245dd46c9a8e"
+                  },
+                  {
+                      "path":  "payload/renderer/settings/assets/iconfont/iconfont.css",
+                      "bytes":  27038,
+                      "sha256":  "b23ca3170e1b53f9de9c1a05cd91d2d168defa88806579c52f5e7182404b761a"
+                  },
+                  {
+                      "path":  "payload/renderer/settings/assets/iconfont/iconfont.woff2",
+                      "bytes":  59268,
+                      "sha256":  "a0db30de9933b2947c210938f6a5065ed0e29d340867020326204ec255871490"
+                  },
+                  {
+                      "path":  "payload/renderer/settings/glow.js",
+                      "bytes":  682,
+                      "sha256":  "2f6b909b6851bacad9c225be3a56c27a1464f1250050fa5c4c790dda88d4bfeb"
+                  },
+                  {
+                      "path":  "payload/renderer/settings/i18n.js",
+                      "bytes":  32807,
+                      "sha256":  "328c8df00a40735d0ca67fea720405d41ff4a07c092d46e96b049038fda39cae"
+                  },
+                  {
+                      "path":  "payload/renderer/settings/index.html",
+                      "bytes":  12048,
+                      "sha256":  "356a8264518e454a5386b55c4ebf40155570bdf30c9d87a5bd35859b2fcde3bc"
+                  },
+                  {
+                      "path":  "payload/renderer/settings/management.js",
+                      "bytes":  13496,
+                      "sha256":  "3e75091a3e2d13b5cafd5554f9554c9854282601eb31e16e67c39b2be2f75f56"
+                  },
+                  {
+                      "path":  "payload/renderer/settings/mhub-theme.css",
+                      "bytes":  6047,
+                      "sha256":  "00de121aebe258f6fa09bb55d51454d6a9884f9b1c388f8f5a1c346a34ff6332"
+                  },
+                  {
+                      "path":  "payload/renderer/settings/pets-manage.css",
+                      "bytes":  4617,
+                      "sha256":  "4c9fb1663c1e4e892c192e1dc5ab078794ec67eb1db3ed714bc8707c097677d7"
+                  },
+                  {
+                      "path":  "payload/renderer/settings/pets-manage.js",
+                      "bytes":  9728,
+                      "sha256":  "9b4b079aa88cafd5c82631677c0069fb479d79ce3b1ae876fe814e3b88c557a5"
+                  },
+                  {
+                      "path":  "payload/renderer/settings/settings.css",
+                      "bytes":  33172,
+                      "sha256":  "8c4a68343f4dd238320669b40178118e7fd835e6468f9ccb4658aba675557372"
+                  },
+                  {
+                      "path":  "payload/renderer/settings/settings.js",
+                      "bytes":  100924,
+                      "sha256":  "4289121df0d00dc1ac5128a9191093f3d719b8dcbd2b9fc9dda72bab56700f45"
+                  },
+                  {
+                      "path":  "payload/renderer/settings/web-adapter.js",
+                      "bytes":  2751,
+                      "sha256":  "63cc763094f2c825c74efe1bd76a17b257c8a69b6fecf0328bb0050ba620e585"
+                  },
+                  {
+                      "path":  "payload/shared/actions.js",
+                      "bytes":  3431,
+                      "sha256":  "27df6974cf870c4aa8e61ea0ea441fbb451e466d777ed505b7fd317f67dba108"
+                  },
+                  {
+                      "path":  "payload/shared/quality.js",
+                      "bytes":  6676,
+                      "sha256":  "ba857cf65e8124739c28496690a8aa910db6f1856dfb5e4dd18a32e830c29fe5"
+                  },
+                  {
+                      "path":  "payload/VERSION",
+                      "bytes":  7,
+                      "sha256":  "61cd2e70b17ad33553792f15d1b5e3fcb7b8a60b4ceb3da3fbdb7453b00efdfa"
+                  },
+                  {
+                      "path":  "安装.cmd",
+                      "bytes":  3298,
+                      "sha256":  "c1b79cb6260eb3733248352803165049af809135720f0fb41c54b9ab3d7ab06c"
+                  },
+                  {
+                      "path":  "安装.ps1",
+                      "bytes":  22120,
+                      "sha256":  "78184fc2d01320dc6f15d205408456be5484f2a4a4fbff3315e24db6ef88f2ed"
+                  },
+                  {
+                      "path":  "使用说明.txt",
+                      "bytes":  3638,
+                      "sha256":  "c385265a20f2ed047001f4555c9570ca861796c6c9ae460cfd3b5d16df49cf6c"
+                  },
+                  {
+                      "path":  "卸载.cmd",
+                      "bytes":  3012,
+                      "sha256":  "0a3a6a8f9abf143a2189f6ebf465307b0f77ffd4fbdfa3358166d5a0217005d7"
+                  },
+                  {
+                      "path":  "卸载.ps1",
+                      "bytes":  6298,
+                      "sha256":  "866455d4a3709d7a60f4b44f443287fd2db4accb4514e30bc2cb4c648c6c9236"
+                  }
+              ]
+}

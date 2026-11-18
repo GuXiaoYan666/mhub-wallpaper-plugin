@@ -1,0 +1,97 @@
+/* MHUB driver-ui 2026-11. Native HTML controls share the host's DU material,
+   typography and geometry while retaining the plugin's local/offline behavior. */
+:root {
+  --du-bg-b1: #e6e7ed;
+  --du-bg-b2: rgba(255,255,255,.5);
+  --du-fill-p1: rgba(0,0,0,.04);
+  --du-fill-p2: rgba(0,0,0,.08);
+  --du-glass-btn: rgba(255,255,255,.4);
+  --du-on-l-c2: rgba(0,0,0,.9);
+  --bg: var(--du-bg-b1);
+  --panel: var(--du-bg-b2);
+  --surface: rgba(255,255,255,.32);
+  --surface-sunken: var(--du-fill-p1);
+  --sidebar-top: rgba(255,255,255,.4);
+  --sidebar-bottom: rgba(255,255,255,.22);
+  --text: var(--du-on-l-c2);
+  --text-soft: rgba(0,0,0,.66);
+  --text-hint: rgba(0,0,0,.6);
+  --border: rgba(255,255,255,.55);
+  --border-strong: rgba(255,255,255,.85);
+  --shadow-panel: inset 0 1px 0 rgba(255,255,255,.65), 0 6px 24px rgba(32,40,55,.04);
+  --radius-panel: 24px;
+  --switch-off: rgba(0,0,0,.16);
+  --hero-wash-1: rgba(255,255,255,.4);
+  --hero-wash-2: rgba(255,255,255,.16);
+  --hero-wash-3: rgba(200,206,217,.2);
+  --hero-wash-4: rgba(210,215,225,.3);
+}
+body:not([data-inline]) {
+  font-family: MiSans, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  background: radial-gradient(ellipse at 30% 10%, rgba(248,253,255,.9), transparent 60%),
+    radial-gradient(ellipse at 95% 85%, rgba(207,214,226,.65), transparent 65%), var(--bg);
+}
+html:has(body[data-inline]), body[data-inline] { background: transparent; }
+body[data-inline] { font-family: MiSans,"PingFang SC","Microsoft YaHei",Arial,sans-serif; }
+.switch input:checked + .track { background: rgba(0,0,0,.9); }
+.switch .track::after, .switch input:checked + .track::after { background: #fff; box-shadow:0 1px 3px rgba(0,0,0,.12); }
+button,.pet-item,.segmented,.hero-tool,.switch { background-image: radial-gradient(110px circle at var(--glow-x,-200px) var(--glow-y,-200px),rgba(255,255,255,.42),transparent 75%); }
+button.is-glowing,.pet-item.is-glowing,.hero-tool.is-glowing { box-shadow:inset 0 1px 0 rgba(255,255,255,.8),0 0 16px rgba(255,255,255,.28); }
+.primary-button.is-glowing { background-image:radial-gradient(130px circle at var(--glow-x) var(--glow-y),rgba(255,255,255,.22),transparent 75%); }
+.mc-icon { font-size:20px; }
+.toggle-label,.segmented-item,.tablist .tab-item,.action-tile-label,.pet-item-name { font-size:14px; }
+.toggle-label { font-weight:400; }
+.block-head-title,.sidebar-heading { font-size:16px;font-weight:600; }
+.panel, .sidebar { border-color: var(--border); }
+.sidebar { padding: 20px 16px 26px; }
+.sidebar-heading { font-size: 14px; font-weight: 600; color: var(--text); }
+.pet-item { border-radius: 18px; background: rgba(255,255,255,.28); border-color: transparent; padding: 12px; }
+.pet-item:hover:not(.active) { background: rgba(255,255,255,.5); }
+.pet-item.active { background: rgba(255,255,255,.75); color: var(--text); border-color: var(--border-strong); box-shadow: 0 4px 14px rgba(32,40,55,.06); }
+.pet-item.active .pet-item-name { color: var(--text); }
+.pet-item.active .pet-item-meta { color: var(--text-soft); }
+.pet-item.active .pet-item-level { color: var(--text-soft); }
+.pet-item.active .pet-item-badge { background: var(--du-fill-p2); color: var(--text); }
+.pet-item.active .pet-item-star { color: var(--text); }
+.pet-item-star .mc-icon { font-size:14px; }
+.pet-item-name { font-size: 14px; }
+.pet-import, .ghost-button, .primary-button, .hero-tool, .size-value, .name-input, .import-command {
+  border-radius: 36px;
+}
+.pet-import, .ghost-button { background: var(--du-glass-btn); border-color: var(--border); box-shadow: inset 0 1px 0 rgba(255,255,255,.5); }
+.ghost-button:hover:not(:disabled), .pet-import:hover:not(:disabled) { background: rgba(255,255,255,.7); }
+.hero { border-radius: 20px; }
+.info-card { border-radius: 20px; background: rgba(255,255,255,.22); border-color: transparent; }
+.action-tile { border-radius: 16px; background: rgba(255,255,255,.28); border-color: transparent; }
+.action-tile:hover:not(.active):not(:disabled) { background: rgba(255,255,255,.5); }
+.action-tile.active { background: rgba(255,255,255,.85); border-color: var(--border-strong); color: var(--text); box-shadow: 0 3px 10px rgba(32,40,55,.06); }
+.action-tile.active *, .action-tile.active .action-tile-label { color: var(--text); }
+.action-tile.active .action-tile-frame { background-color: var(--du-fill-p1); }
+.segmented { background: var(--du-fill-p1); border-color: transparent; border-radius: 36px; padding: 3px; }
+.segmented-item { border-radius: 36px; min-height: 26px; }
+.segmented-item[aria-checked="true"], .tablist .tab-item[aria-selected="true"], .management-tabs .segmented-item[aria-selected="true"] {
+  background: rgba(255,255,255,.8); color: var(--text); box-shadow: 0 2px 6px rgba(32,40,55,.06);
+}
+.dialog { border-radius: 24px; background: #f2f3f7; border: 1px solid rgba(255,255,255,.8); box-shadow: 0 16px 60px rgba(32,40,55,.16); }
+.dialog-title { font-size: 18px; line-height: 1.4; }
+.dialog-text, .management-content p { line-height: 1.6; }
+.management-item, .management-confirm { border-radius: 16px; background: var(--du-fill-p1); }
+.management-content h4 { font-size: 14px; }
+.management-dialog .name-actions { margin-top: 16px; }
+.desktop-tools { gap: 8px; }
+.side-panel:not(.settings-panel) .action-tile { padding-block: 4px; }
+.side-panel:not(.settings-panel) .action-tile-frame { width: 32px; height: 35px; flex-basis: 32px; }
+.settings-panel .block-footer { padding-top: 8px; }
+.settings-panel .toggles > .toggle[data-tab="desktop"] { padding-block: 4px; }
+.settings-panel .toggles > .toggle-locale { padding-block: 4px; }
+.desktop-tools .ghost-button { min-height: 32px; padding: 6px 8px; }
+.host-tip { border-radius: 12px; background: #f2f3f7; }
+@media (max-width:1120px), (max-height:700px) {
+  .sidebar { padding: 14px 12px 26px; }
+  .pet-item { padding: 10px; }
+  :root { --radius-panel: 20px; }
+}
+@media (forced-colors:active) {
+  .pet-item.active, .action-tile.active { outline: 2px solid Highlight; }
+  .segmented-item[aria-checked="true"], .tab-item[aria-selected="true"] { outline: 1px solid Highlight; }
+}

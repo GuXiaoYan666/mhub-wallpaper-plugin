@@ -4,6 +4,10 @@ const fs = require('fs');
 const TAG = 'lyric-bridge';
 const ICON_PRIME_DELAY_MS = 6000;
 const PLAYERS_REFRESH_MS = 60000;
+const PLAYERS_REFRESH_IDLE_MS = 300000;   /* 零播放器时放宽到 5 分钟 */
+const RUNNING_REFRESH_MS = 2000;
+const RUNNING_REFRESH_IDLE_MS = 15000;   /* 休眠时 15s 一次 */
+const ACTIVITY_IDLE_THRESHOLD_MS = 30000; /* 30s 没活动就进入休眠 */
 let ctx = null;
 let bootError = null;
 function readVersion() {
@@ -52,7 +56,8 @@ function createContext() {
     runningBusy: false,
     iconCache: new Map(),
     iconTimer: null,
-    timers: []
+    timers: [],
+    idleSince: 0          /* 零活动时间戳；超过阈值则进入休眠模式，定时器间隔拉长 */
   };
   function setError(code, e) {
     env.error = errorPayload(e, code);
@@ -165,25 +170,34 @@ function createContext() {
     env.audioReactive.setActive(!env.stopping && bridge.audioWanted() && getConfig().pluginEnabled !== false && !!(now && now.ready && !now.error && now.media && now.media.playing));
   }
   let lastAutoScanAt = 0;
+  let mediaActivityKey = '';
   function maybeAutoScanPlayers() {
     const now = env.mediaSession && env.mediaSession.snapshot();
     const media = now && now.media;
     if (!media || !media.id) return;
     if (/chrome|edge|firefox|brave|opera|vivaldi|webview/i.test(media.id)) return;
     if (String(media.id).indexOf('lyric:') === 0) return;
-    const key = String(media.id).toLowerCase().replace(/\.exe$/, '');
     for (let i = 0; i < env.players.length; i++) {
-      const exe = String(env.players[i].exe || '').toLowerCase();
-      if (!exe) continue;
-      const base = exe.split(/[\\/]/).pop().replace(/\.exe$/, '');
-      if (base && (base.indexOf(key) >= 0 || key.indexOf(base) >= 0)) return;
+      if (playersMod && playersMod.sessionMatchesPlayer(media.id, env.players[i])) return;
     }
     if (Date.now() - lastAutoScanAt < 60000) return;
     lastAutoScanAt = Date.now();
     logger.info('players: 发现未登记的播放器 ' + media.id + '，自动重新扫描列表');
     refreshPlayers(true);
   }
-  env.mediaSession = createMediaSession({onChange:function () { bridge.push(snapshot()); updateAudioDemand(); maybeAutoScanPlayers(); }});
+  env.mediaSession = createMediaSession({onChange:function () {
+    const now = env.mediaSession && env.mediaSession.snapshot();
+    const media = now && now.media;
+    const activityKey = media ? [media.id, media.key, media.playing ? 1 : 0].join('|') : '';
+    /* 时间轴通知很频繁，只有切歌或播放状态变化才算真实活动。 */
+    if (activityKey !== mediaActivityKey) {
+      mediaActivityKey = activityKey;
+      if (env.resetIdle) env.resetIdle();
+    }
+    bridge.push(snapshot());
+    updateAudioDemand();
+    maybeAutoScanPlayers();
+  }});
   function handleUplink(msg, wc) {
     const wcId = wc && wc.id;
     switch (msg && msg.t) {
@@ -309,6 +323,7 @@ function createContext() {
     const ttl = (config.players.refreshMs > 0 ? config.players.refreshMs : PLAYERS_REFRESH_MS);
     if (!force && env.players.length && Date.now() - env.playersAt < ttl) return Promise.resolve(env.players);
     const prevIds = env.players.map(function (p) { return p.id; });
+    const prevRunningIds = env.players.filter(function (p) { return p.running; }).map(function (p) { return p.id; });
     env.playersBusy = true;
     return Promise.resolve()
       .then(function () { return playersMod.scanPlayers({ force: !!force }); })
@@ -329,6 +344,11 @@ function createContext() {
           added: list.filter(function (p) { return prevIds.indexOf(p.id) === -1; }).length
         };
         logger.info('players: ' + list.length + ' 个 (' + list.map(function (p) { return p.id + (p.running ? '*' : ''); }).join(',') + ')');
+        /* 新播放器或新启动的进程才唤醒，持续运行本身不反复重置休眠。 */
+        if ((env.resetIdle) && (list.length > prevIds.length || list.some(function (p) { return p.running && prevRunningIds.indexOf(p.id) === -1; }))) {
+          env.resetIdle();
+          logger.debug('player activity detected, waking from idle mode');
+        }
         bridge.pushForced();
         primeIcons();
         return list;
@@ -373,10 +393,12 @@ function createContext() {
     playersMod.refreshRunning(env.players.map(p => p.id)).then(function (result) {
       if (!result || !result.ok) return;
       let changed = false;
+      let started = false;
       env.players.forEach(function (p) {
         const running = !!(result.states[p.id] && result.states[p.id].running);
-        if (p.running !== running) { p.running = running; changed = true; }
+        if (p.running !== running) { p.running = running; changed = true; started = started || running; }
       });
+      if (started && env.resetIdle) env.resetIdle();
       if (changed) bridge.pushForced();
     }).catch(function () {}).finally(function () { env.runningBusy = false; });
   }
@@ -398,22 +420,70 @@ function createContext() {
     engine.start();
     bridge.start();
     env.mediaSession.start();
-    electron.app.once('before-quit', function () { env.stopping = true; env.timers.forEach(clearInterval); clearTimeout(env.iconTimer); env.audioReactive.stop(); env.mediaSession.stop(); engine.stop(); kugouTimeline.stop(); mineradioUia.stop(); });
+    env.idleSince = Date.now();
+    electron.app.once('before-quit', function () { env.stopping = true; env.timers.forEach(function (h) { if (typeof h === 'number') clearInterval(h); else if (h) clearTimeout(h); }); clearTimeout(env.iconTimer); env.audioReactive.stop(); env.mediaSession.stop(); engine.stop(); kugouTimeline.stop(); mineradioUia.stop(); });
     refreshPlayers(false);
-    env.timers.push(setInterval(safe(function () { refreshPlayers(false); }, 'players refresh'), PLAYERS_REFRESH_MS));
-    env.timers.push(setInterval(safe(refreshRunning, 'players running'), 2000));
-    env.timers.push(setInterval(safe(updateAudioDemand, 'audio demand'), 1000));
-    const clipboard = electron.clipboard;
-    if (clipboard && typeof clipboard.readText === 'function') {
-      const scanClipboard = safe(function () {
-        const t = clipboard.readText();
-        if (t && t.length < 4000 && /bilibili\.com|BV[0-9A-Za-z]{10}/.test(t)) bilibili.noteText(t);
-      }, 'clipboard scan');
-      scanClipboard();
-      env.timers.push(setInterval(scanClipboard, 1500));
+
+    /* 动态间隔调度：根据 idle 状态决定频率，零播放器时 CPU 占用降一个量级 */
+    function isIdle() {
+      return Date.now() - env.idleSince > ACTIVITY_IDLE_THRESHOLD_MS;
     }
+    function resetIdle() { env.idleSince = Date.now(); }
+    env.resetIdle = resetIdle;
+
+    function schedulePlayersRefresh() {
+      if (env.stopping) return;
+      var ms = isIdle() ? PLAYERS_REFRESH_IDLE_MS : PLAYERS_REFRESH_MS;
+      var t = setTimeout(function () {
+        refreshPlayers(false).then(function () { schedulePlayersRefresh(); });
+      }, ms);
+      if (typeof t.unref === 'function') t.unref();
+    }
+    schedulePlayersRefresh();
+
+    function scheduleRunningRefresh() {
+      if (env.stopping) return;
+      var ms = isIdle() ? RUNNING_REFRESH_IDLE_MS : RUNNING_REFRESH_MS;
+      var t = setTimeout(function () {
+        safe(refreshRunning, 'players running')();
+        scheduleRunningRefresh();
+      }, ms);
+      if (typeof t.unref === 'function') t.unref();
+    }
+    scheduleRunningRefresh();
+
+    function scheduleAudioDemand() {
+      if (env.stopping) return;
+      var ms = isIdle() ? 10000 : 1000;   /* 休眠时 10s 查一次 */
+      var t = setTimeout(function () {
+        safe(updateAudioDemand, 'audio demand')();
+        scheduleAudioDemand();
+      }, ms);
+      if (typeof t.unref === 'function') t.unref();
+    }
+    scheduleAudioDemand();
+
+    /* 剪贴板 B 站链接扫描：休眠时停掉，活动时每 5s 扫一次 */
+    function scheduleClipboardScan() {
+      if (env.stopping) return;
+      var idle = isIdle();
+      var ms = idle ? 30000 : 5000;
+      var t = setTimeout(function () {
+        if (!idle) {
+          var cb = electron.clipboard;
+          if (cb && typeof cb.readText === 'function') {
+            var text = cb.readText();
+            if (text && text.length < 4000 && /bilibili\.com|BV[0-9A-Za-z]{10}/.test(text))
+              bilibili.noteText(text);
+          }
+        }
+        scheduleClipboardScan();
+      }, ms);
+      if (typeof t.unref === 'function') t.unref();
+    }
+    scheduleClipboardScan();
+
     env.iconTimer = setTimeout(safe(function () { refreshPlayers(false).then(function () { return primeIcons(); }); }, 'icon prime'), ICON_PRIME_DELAY_MS);
-    for (let i = 0; i < env.timers.length; i++) if (env.timers[i] && env.timers[i].unref) env.timers[i].unref();
     if (env.iconTimer && env.iconTimer.unref) env.iconTimer.unref();
     logger.info('plugin ready: bridge+engine started');
     return env;

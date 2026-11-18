@@ -40,7 +40,9 @@
     accessLevel: '03',
     accent: '',
     glitchA: '',
-    glitchB: ''
+    glitchB: '',
+    /* 分阶段开关：可单独关闭任意段落；全部 false 时直接进入 welcome 终幕。 */
+    stages: { intro: true, setup: true, steps: true, welcome: true }
   }
 
   function num(value, min, max, fallback) {
@@ -73,6 +75,15 @@
     out.voice = !!out.voice
     out.requireInteraction = !!out.requireInteraction
     out.allowSkip = !!out.allowSkip
+    /* stages：用户可能只覆盖部分键，缺失的补回 true（默认全开）。 */
+    var defStages = DEFAULTS.stages
+    var userStages = (out.stages && typeof out.stages === 'object') ? out.stages : {}
+    out.stages = {
+      intro: userStages.intro !== false,
+      setup: userStages.setup !== false,
+      steps: userStages.steps !== false,
+      welcome: userStages.welcome !== false
+    }
     return out
   }
 
@@ -279,6 +290,15 @@
     var list = waiters.slice()
     waiters.length = 0
     for (var j = 0; j < list.length; j++) { try { list[j]() } catch (e) { /* noop */ } }
+    /* 跳过阶段时也可能挂着 hexTimer / clockTimer：一并清掉 */
+    stopHex()
+    if (hexTimer) { clearInterval(hexTimer); hexTimer = null }
+    if (clockTimer) { clearInterval(clockTimer); clockTimer = null }
+    /* 释放 WebAudio 上下文：AudioContext.close() 会停止所有节点并释放底层资源 */
+    if (actx && typeof actx.close === 'function') {
+      try { var _ = actx.close(); } catch (e) { /* ignore */ }
+      actx = null
+    }
   }
 
   function setIn(node, on) {
@@ -348,27 +368,30 @@
     host.appendChild(frag)
   }
 
-  /* ── 音频载体：所有声音都走相对路径的 <audio>，不内嵌 base64 ─────────── */
-  var FILES = {
-    'line-1': 'line-1.mp3',
-    'line-2': 'line-2.mp3',
-    'line-3': 'line-3.mp3',
-    'line-4': 'line-4.mp3',
-    'line-5': 'line-5.mp3',
-    'line-6': 'line-6.mp3',
-    'sfx-tick': 'sfx-tick.mp3',
-    'sfx-ticks-run': 'sfx-ticks-run.mp3'
+  /* ── 音频载体：按需加载被启用阶段需要的素材，减少首屏内存占用 ──────── */
+  var S = C.stages
+  var FILES = {}
+  if (C.sfx) {
+    if (S.steps) { FILES['sfx-tick'] = 'sfx-tick.mp3'; FILES['sfx-ticks-run'] = 'sfx-ticks-run.mp3' }
+  }
+  if (C.voice) {
+    if (S.steps) {
+      FILES['line-1'] = 'line-1.mp3'; FILES['line-2'] = 'line-2.mp3';
+      FILES['line-3'] = 'line-3.mp3'; FILES['line-4'] = 'line-4.mp3';
+      FILES['line-5'] = 'line-5.mp3'
+    }
+    if (S.welcome) FILES['line-6'] = 'line-6.mp3'
   }
   var bank = {}
   Object.keys(FILES).forEach(function (key) {
     try {
       var a = document.createElement('audio')
-      a.preload = 'auto'
+      /* 被跳过的段落对应的音频不 preload，等用到时浏览器自己按需加载，节省首屏内存 */
+      a.preload = 'metadata'
       a.src = (window.__MHUB_SPLASH_ASSETS || './startup-assets/') + FILES[key]
       a.setAttribute('data-audio', key)
       ui.audioBank.appendChild(a)
       bank[key] = a
-      a.load()
     } catch (e) { /* 单个素材失败不影响流程 */ }
   })
 
@@ -735,7 +758,7 @@
     return wait(300)
   }
 
-  /* ── 主线时间线 ───────────────────────────────────────────────────────── */
+  /* ── 主线时间线：按 stages 配置跳过段落 ──────────────────────────────── */
   function run() {
     paintClock()
     clockTimer = setInterval(paintClock, 1000)
@@ -744,43 +767,56 @@
     /* SKIP 在序幕结尾就可用：黑底上一行小字，不抢第一幕的注意力 */
     setTimeout(showSkip, 1200)
 
-    return Promise.resolve()
-      /* 第一幕：纯黑 → K 标 */
-      .then(function () { return wait(820) })
-      .then(function () {
-        ui.blackInner.classList.add('dsu-in')
-        Sfx.rise()
-        return wait(240)
-      })
-      .then(function () {
-        ui.blackEn.classList.add('dsu-tighten')
-        return wait(880)
-      })
-      .then(function () {
-        ui.sweep.classList.add('dsu-go')
-        return wait(760)
-      })
-      /* 过曝洗白 */
-      .then(function () {
-        ui.blackInner.classList.add('dsu-out')
-        Sfx.sweep()
-        ui.wash.style.transition = 'opacity 220ms linear'
-        ui.wash.style.opacity = '1'
-        return wait(260)
-      })
-      .then(function () {
-        ui.plate.style.transition = 'opacity 900ms ease'
-        ui.plate.style.opacity = '1'
-        ui.watermark.style.transition = 'opacity 1100ms ease'
-        ui.watermark.style.opacity = '1'
-        ui.wash.style.transition = 'opacity 720ms cubic-bezier(.2,.9,.2,1)'
-        ui.wash.style.opacity = '0'
-        ui.black.style.transition = 'opacity 720ms ease'
-        ui.black.style.opacity = '0'
-        return wait(760)
-      })
-      /* 第二幕：品牌块 / 页脚 / 进度 / 机框 */
-      .then(function () {
+    /* intro 段：纯黑 → K 标 → 洗白 → 品牌底板淡入
+       每段动态读 C.stages，allow __MHUBApplySplashConfig 中途切换 */
+    var chain
+    if (C.stages.intro) {
+      chain = Promise.resolve()
+        .then(function () { return wait(820) })
+        .then(function () {
+          ui.blackInner.classList.add('dsu-in')
+          Sfx.rise()
+          return wait(240)
+        })
+        .then(function () {
+          ui.blackEn.classList.add('dsu-tighten')
+          return wait(880)
+        })
+        .then(function () {
+          ui.sweep.classList.add('dsu-go')
+          return wait(760)
+        })
+        /* 过曝洗白 */
+        .then(function () {
+          ui.blackInner.classList.add('dsu-out')
+          Sfx.sweep()
+          ui.wash.style.transition = 'opacity 220ms linear'
+          ui.wash.style.opacity = '1'
+          return wait(260)
+        })
+        .then(function () {
+          ui.plate.style.transition = 'opacity 900ms ease'
+          ui.plate.style.opacity = '1'
+          ui.watermark.style.transition = 'opacity 1100ms ease'
+          ui.watermark.style.opacity = '1'
+          ui.wash.style.transition = 'opacity 720ms cubic-bezier(.2,.9,.2,1)'
+          ui.wash.style.opacity = '0'
+          ui.black.style.transition = 'opacity 720ms ease'
+          ui.black.style.opacity = '0'
+          return wait(760)
+        })
+    } else {
+      /* 跳过 intro：直接亮底，不挂黑色遮罩 */
+      ui.black.style.display = 'none'
+      ui.plate.style.opacity = '1'
+      ui.watermark.style.opacity = '1'
+      ui.wash.style.opacity = '0'
+      chain = wait(120)
+    }
+
+    /* setup 段：品牌块 / 页脚 / 进度 / 机框 */
+    if (C.stages.setup) {
+      chain = chain.then(function () {
         ui.brand.classList.add('dsu-in')
         ui.foot.classList.add('dsu-in')
         ui.stepcount.classList.add('dsu-in')
@@ -795,19 +831,42 @@
         setSlats(0)
         setSubtitle('系统自检中…', 'SYSTEM SELF-CHECK')
         return wait(700)
-      })
-      .then(function () {
+      }).then(function () {
         ui.black.style.display = 'none'
         sweepLine()
       })
-      .then(stepLoop)
-      .then(finale)
-      .catch(function (err) {
-        try { console.warn('[M HUB startup] timeline error:', err) } catch (e) {}
-        markWelcomeDone()
-        finished = true
-        if (clockTimer) { clearInterval(clockTimer); clockTimer = null }
+    } else {
+      /* 跳过 setup：让 plate/watermark 直接在终幕时才挂到 welcome 里 */
+      chain = chain.then(function () { ui.black.style.display = 'none' })
+    }
+
+    /* steps 段：5 步授权。全部跳过的话直接进 welcome */
+    if (C.stages.steps) {
+      chain = chain.then(stepLoop)
+    } else {
+      chain = chain.then(function () { return wait(200) })
+    }
+
+    /* welcome 终幕 */
+    if (C.stages.welcome) {
+      chain = chain.then(finale)
+    } else {
+      chain = chain.then(function () {
+        /* 不播 welcome：直接标记完成收窗 */
+        return wait(200).then(function () {
+          markWelcomeDone()
+          finished = true
+          if (clockTimer) { clearInterval(clockTimer); clockTimer = null }
+        })
       })
+    }
+
+    return chain.catch(function (err) {
+      try { console.warn('[M HUB startup] timeline error:', err) } catch (e) {}
+      markWelcomeDone()
+      finished = true
+      if (clockTimer) { clearInterval(clockTimer); clockTimer = null }
+    })
   }
 
   function stepLoop() {
@@ -876,6 +935,9 @@
     if (welcomeDone) return
     welcomeDone = true
     welcomeEndedAt = performance.now()
+    /* 终幕已过：释放所有定时器和 WebAudio 上下文，让渲染进程尽快降内存 */
+    releaseAll()
+    Voice.stop()
     var list = welcomeCbs.slice()
     welcomeCbs.length = 0
     for (var i = 0; i < list.length; i++) {
@@ -978,9 +1040,6 @@
     if (skipped) return
     skipped = true
     releaseAll()
-    stopHex()
-    if (hexTimer) { clearInterval(hexTimer); hexTimer = null }
-    if (clockTimer) { clearInterval(clockTimer); clockTimer = null }
     Voice.stop()
     ui.action.classList.remove('dsu-in')
     beginLeave(dismissFade)

@@ -28,7 +28,6 @@
     docked: true,
     netOn: true,
     diskOn: true,
-    pomoOn: true,
     lunarOn: true,
     battOn: true,
     cdOn: true,
@@ -290,16 +289,6 @@
     '.cd-form .in-name{flex:1;min-width:0}',
     '.cd-form .in-date{flex:0 0 118px}',
     '.cd-form .btn{width:auto;padding:0 9px;height:25px;border-radius:8px;font-size:10px;flex:0 0 auto;background:var(--btn-bg)}',
-    '.pomo{display:flex;align-items:center;gap:9px;margin-top:10px;padding:9px 11px;border-radius:14px;',
-    'background:var(--card);border:1px solid var(--line)}',
-    '.pomo-time{font-size:16px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:.4px;min-width:50px}',
-    '.pomo-time.work{color:var(--accent)}',
-    '.pomo-time.break{color:var(--green)}',
-    '.pomo-meta{flex:1;font-size:9.5px;color:var(--fg-faint);line-height:1.5}',
-    '.pomo-phase{font-size:10.5px;font-weight:600;color:var(--fg-dim)}',
-    '.pomo-btns{display:flex;gap:5px}',
-    '.pomo-btns .btn{width:24px;background:rgba(27,31,36,.05)}',
-    '.dark .pomo-btns .btn{background:rgba(255,255,255,.08)}',
     '.foot{display:flex;align-items:center;gap:8px;margin-top:10px;padding-top:9px;border-top:1px solid var(--line);font-size:9.5px;color:var(--fg-faint)}',
     '.foot .btn{width:auto;padding:0 8px;height:18px;border-radius:6px;font-size:9.5px}',
     '.credit{margin-top:6px;font-size:9px;line-height:1.3;text-align:right;color:var(--fg-faint);opacity:.75;letter-spacing:.2px}',
@@ -433,14 +422,6 @@
         '</div>' +
         '<div class="cd-list"></div>' +
       '</div>' +
-      '<div class="pomo m-pomo">' +
-        '<div class="pomo-time">25:00</div>' +
-        '<div class="pomo-meta"><div class="pomo-phase">番茄钟</div><div class="pomo-sub">专注 ' + 25 + ' 分钟</div></div>' +
-        '<div class="pomo-btns">' +
-          '<button class="btn pomo-play" title="开始/暂停">▶</button>' +
-          '<button class="btn pomo-reset" title="重置">↺</button>' +
-        '</div>' +
-      '</div>' +
       '<div class="foot">' +
         '<span class="f-batt" style="display:none"></span>' +
         '<span class="f-uptime">开机 --</span>' +
@@ -465,12 +446,7 @@
     'transition:background .16s,box-shadow .16s,color .16s;-webkit-app-region:no-drag;pointer-events:auto}' +
     '#sd-chip .sd-ico{display:flex;align-items:center}' +
     '#sd-chip .sd-ico svg{display:block}' +
-    '#sd-chip .sd-meta{display:flex;align-items:center;gap:7px;margin-left:8px;font-size:14px}' +
-    '#sd-chip .sd-sep{width:1px;height:13px;border-radius:1px;background:currentColor;opacity:.16;flex:0 0 auto}' +
-    '#sd-chip .sd-time{font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:.3px;opacity:.85}' +
-    '#sd-chip .sd-wx{display:flex;align-items:center;gap:3px;opacity:.85}' +
-    '#sd-chip .sd-wx svg{display:block}' +
-    '#sd-chip .sd-cpu{font-variant-numeric:tabular-nums;opacity:.6}' +
+    '#sd-chip .sd-txt{overflow:visible}' +
     '#sd-chip:hover{background:rgba(255,255,255,.5);border-radius:999px}' +
     '#sd-chip.on{background:rgba(255,255,255,.82);border-radius:999px;box-shadow:0 1px 4px rgba(23,30,52,.06)}' +
     '#sd-chip.dark{color:#d7dbe2}' +
@@ -478,7 +454,6 @@
     '#sd-chip.dark.on{background:rgba(255,255,255,.16)}' +
     '#sd-chip.sd-float{position:fixed;z-index:2147483000;height:38px;padding:0 14px;border-radius:19px;' +
     'gap:8px;font:14px/1 "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;color:#3d434b}' +
-    '#sd-chip.sd-float .sd-meta{margin-left:0}' +
     '#sd-chip[hidden]{display:none!important}' +
     '#sd-chip-bg{position:fixed;z-index:2147482998;pointer-events:none;opacity:0;' +
     'background:rgba(255,255,255,.55);box-sizing:border-box;' +
@@ -496,10 +471,7 @@
   var pill = document.createElement('span');
   pill.id = 'sd-chip';
   pill.className = 'sd-chip sd-float';
-  pill.innerHTML = '<span class="sd-ico">' + PULSE_SVG + '</span><span class="sd-txt">状态</span>' +
-    '<span class="sd-meta"><span class="sd-sep"></span><span class="sd-time">--:--</span>' +
-    '<span class="sd-wx"><span class="sd-wx-ico"></span><span class="sd-wx-t">--°</span></span>' +
-    '<span class="sd-cpu">--%</span></span>';
+  pill.innerHTML = '<span class="sd-ico">' + PULSE_SVG + '</span><span class="sd-txt">仪表盘</span>';
   (document.body || document.documentElement).appendChild(pill);
   var chipBg = document.createElement('div');
   chipBg.id = 'sd-chip-bg';
@@ -531,16 +503,14 @@
     wxText: q('.wx-text'), wxRange: q('.wx-range'), wxCity: q('.wx-city'), wxFc: q('.wx-fc'),
     wxMeta: q('.wx-meta'), wxStale: q('.wx-stale'),
     wxSet: q('.wx-set'), wxCityIn: q('.wx-city-in'), wxCitySave: q('.wx-city-save'), wxCityCancel: q('.wx-city-cancel'),
-    pomo: q('.m-pomo'), pomoTime: q('.pomo-time'), pomoPhase: q('.pomo-phase'),
-    pomoSub: q('.pomo-sub'), pomoPlay: q('.pomo-play'), pomoReset: q('.pomo-reset'),
     cd: q('.m-cd'), cdList: q('.cd-list'), cdAdd: q('.cd-add'),
     cdForm: q('.cd-form'), cdName: q('.in-name'), cdDate: q('.in-date'),
     cdSave: q('.cd-save'), cdCancel: q('.cd-cancel'),
     themeBtn: q('.theme-btn'),
     wxRefresh: q('.wx-refresh'), deckMin: q('.deck-min'), deckOff: q('.deck-off'), deckPop: q('.deck-pop'),
     fUptime: q('.f-uptime'), fHost: q('.f-host'), fBatt: q('.f-batt'),
-    pillTime: qp('.sd-time'), pillDot: null, pillCpu: qp('.sd-cpu'),
-    pillWx: qp('.sd-wx'), pillWxIco: qp('.sd-wx-ico'), pillWxT: qp('.sd-wx-t')
+    pillTime: null, pillDot: null, pillCpu: null,
+    pillWx: null, pillWxIco: null, pillWxT: null
   };
 
   // ---------- 定位 ----------
@@ -706,7 +676,7 @@
         btn.setAttribute('role', 'tab');
         btn.className = 'du-segmented-button__item is-content-icon-text';
         btn.setAttribute('data-value', 'sysdeck');
-        btn.setAttribute('aria-label', '状态');
+        btn.setAttribute('aria-label', '仪表盘');
         btn.setAttribute('aria-selected', 'false');
         rail.appendChild(btn);
       } catch (_) { return false; }
@@ -752,6 +722,7 @@
       return;
     }
     var group = findNavGroup();
+    var floatFallback = false;
     if (group && !chipGroupFailed) {
       if (ensureSegment(group)) {
         bindChipGuard(group);
@@ -764,20 +735,35 @@
             base = gr.width;
             group.setAttribute('data-sd-w', String(Math.round(base)));
           }
-          group.style.width = Math.round(base + (pr.right - gr.right) + 10) + 'px';
+          var need = Math.round(pr.right - gr.right) + 10;
+          /* 窗口化时表头右侧要留给窗口按钮，撑开导航组会把芯片尾部裁掉：
+             只有确认表头还有余量才撑宽，否则退回下面的悬浮胶囊，信息整段可见。 */
+          var room = 0;
+          try {
+            var navParent = group.parentElement;
+            if (navParent) room = navParent.getBoundingClientRect().right - 156 - gr.left;
+          } catch (_) { room = 0; }
+          if (room > base + 80 && base + need <= room) {
+            group.style.width = Math.round(base + need) + 'px';
+          } else if (need > 0) {
+            floatFallback = true;
+          }
         }
-        chipFloat = false;
-        pill.classList.remove('sd-float');
-        chipBg.style.opacity = '0';
-        pill.style.left = pill.style.top = pill.style.right = '';
-        pill.style.fontSize = '';
-        pill.style.height = '';
-        pill.style.borderRadius = '';
-        pill.style.paddingLeft = pill.style.paddingRight = '';
-        return;
+        if (!floatFallback) {
+          chipFloat = false;
+          pill.classList.remove('sd-float');
+          chipBg.style.opacity = '0';
+          pill.style.left = pill.style.top = pill.style.right = '';
+          pill.style.fontSize = '';
+          pill.style.height = '';
+          pill.style.borderRadius = '';
+          pill.style.paddingLeft = pill.style.paddingRight = '';
+          return;
+        }
+      } else {
+        // 拿不到组件 Shadow DOM：退回固定定位，下面会补一块同色底。
+        chipGroupFailed = true;
       }
-      // 拿不到组件 Shadow DOM：退回固定定位，下面会补一块同色底。
-      chipGroupFailed = true;
     }
     chipFloat = true;
     pill.classList.add('sd-float');
@@ -1104,21 +1090,6 @@
     }
     el.cdForm.style.display = state.cdFormOpen ? 'flex' : 'none';
 
-    // 番茄钟
-    el.pomo.style.display = state.pomoOn ? 'flex' : 'none';
-    if (state.pomoOn && s.pomo) {
-      var p = s.pomo;
-      var mm = Math.floor(p.remainSec / 60);
-      var ss = p.remainSec % 60;
-      el.pomoTime.textContent = pad2(mm) + ':' + pad2(ss);
-      el.pomoTime.className = 'pomo-time ' + (p.phase === 'break' ? 'break' : (p.phase === 'work' || p.phase === 'paused' ? 'work' : ''));
-      el.pomoPhase.textContent = p.phase === 'work' ? '专注中'
-        : p.phase === 'break' ? '休息中'
-        : p.phase === 'paused' ? '已暂停' : '番茄钟';
-      el.pomoSub.textContent = '第 ' + p.round + ' 轮 · ' + p.workMin + '/' + p.breakMin + ' 分钟';
-      el.pomoPlay.textContent = p.running ? '⏸' : '▶';
-    }
-
     el.fUptime.textContent = '开机 ' + fmtUptime(sys.uptimeSec);
     el.fHost.textContent = sys.host || '';
 
@@ -1259,17 +1230,6 @@
     else if (e.key === 'Escape') closeWxCity();
   });
   el.themeBtn.addEventListener('click', function (e) { e.stopPropagation(); cycleTheme(); });
-  el.pomoPlay.addEventListener('click', function (e) {
-    e.stopPropagation();
-    var p = state.snap && state.snap.pomo;
-    var action = p && p.running ? 'pause' : 'start';
-    HOST.send({ t: 'pomodoro', action: action });
-  });
-  el.pomoReset.addEventListener('click', function (e) {
-    e.stopPropagation();
-    HOST.send({ t: 'pomodoro', action: 'reset' });
-  });
-
   // 倒数日：内联表单（Electron 页面不支持 window.prompt）
   el.cdAdd.addEventListener('click', function (e) {
     e.stopPropagation();
@@ -1330,7 +1290,6 @@
       state.docked = s.config.docked !== false;
       state.netOn = s.config.netEnabled !== false;
       state.diskOn = s.config.diskEnabled !== false;
-      state.pomoOn = s.config.pomodoroEnabled !== false;
       state.lunarOn = s.config.lunarEnabled !== false;
       state.battOn = s.config.batteryEnabled !== false;
       state.cdOn = s.config.countdownEnabled !== false;

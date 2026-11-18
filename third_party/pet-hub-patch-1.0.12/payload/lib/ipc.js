@@ -1,0 +1,38 @@
+'use strict';
+
+module.exports = Object.freeze({
+  STATE: 'pet:state',
+  INPUT: 'pet:input',
+  PLAY: 'pet:play',
+  LEVELUP: 'pet:levelup',
+  PREVIEW_LEVELUP: 'pet:preview-levelup',
+  READY: 'pet:ready',
+  DRAG_START: 'pet:drag:start',
+  DRAG_MOVE: 'pet:drag:move',
+  DRAG_END: 'pet:drag:end',
+  CONTEXT: 'pet:context',
+  ACTION_DONE: 'pet:action:done',
+  PERF: 'pet:perf',
+  HD_CACHE: 'pet:hd-cache',
+  GET_STATE: 'pet:get-state',
+  UPDATE: 'pet:update',
+  RESET_POSITION: 'pet:reset-position',
+  SELECT: 'pet:select',
+  DELETE: 'pet:delete',
+  IMPORT: 'pet:import',
+  IMPORT_CANCEL: 'pet:import-cancel',
+  IMPORT_PROGRESS: 'pet:import-progress',
+  QUALITY_RETRY: 'pet:quality-retry',
+  CHANNEL_STATUS: 'pet:channel-status',
+  RECONNECT: 'pet:reconnect',
+  DIAGNOSTICS: 'pet:diagnostics',
+  MANAGE: 'pet:manage',
+  ACTION_CURRENT: 'pet:action-current',
+  CLOSE: 'pet:close',
+  HOST_TIP: 'pet:host-tip',
+  // 桌宠渲染层 → 主进程的宿主提示原文；方向与 HOST_TIP（主进程 → 设置页）相反，别合并成一个名字。
+  PET_TIP: 'pet:tip-html',
+  HOST_STATE: 'pet:driver-state',
+  NOTIFY: 'pet:notify',
+  ROAM: 'pet:roam'
+});

@@ -22,7 +22,6 @@ const DEFAULT_CONFIG = {
   lunar: { enabled: true },
   battery: { enabled: true },
   weather: { enabled: true, refreshMin: 30, location: '', forecast: true },
-  pomodoro: { enabled: true, workMin: 25, breakMin: 5 },
   countdownEnabled: true,
   countdowns: []            // [{ name: '生日', date: 'YYYY-MM-DD' }]，最多 10 条
 };

@@ -55,9 +55,10 @@
     log('electron', error && error.stack || error);
   }
 
-  /* 加载顺序：启动页保护/壁纸 → 歌词 → 仪表板 → 官方宿主。 */
+  /* 加载顺序：启动页保护/壁纸 → 完整桌宠 → 歌词 → sysdeck → 官方宿主。 */
   const plugins = [
-    ['plugin', '../../pet-hub/index.js'],
+    ['wallpaper', '../../wallpaper-hub/index.js'],
+    ['pet', '../../pet-hub/index.js'],
     ['lyric', '../../lyric-bridge/index.js'],
     ['sysdeck', '../../sysdeck/index.js']
   ];

@@ -472,6 +472,7 @@
     [/migu|咪咕/i, '咪咕'],
     [/qianqian|baidumusic|千千/i, '千千'],
     [/spotify/i, 'Spotify'],
+    [/apple\s*music/i, 'Apple Music'],
     [/folia/i, 'Folia'],
     [/mineradio/i, 'Mineradio'],
     [/foobar/i, 'foobar2000'],

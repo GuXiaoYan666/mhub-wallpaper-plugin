@@ -1,7 +1,7 @@
 'use strict';
 /*
  * M HUB 壁纸插件：把 Wallpaper Engine 本地壁纸接进 M HUB 主界面。
- * - 由独立 bootstrap 或 resources\app\pet-hub\index.js 的兼容 shim 装载。
+ * - 由独立 bootstrap 装载，启动页关闭保护位于 startup-guard.js。
  * - 壁纸只作用于 M HUB 自身背景（.wallpaper-background），不再修改桌面壁纸。
  * - 壁纸库与美化面板注入到「设置 → 主题设置」页面。
  * - 上行 console.dir('[mhub-wp]'+JSON)，下行 window.__mhubWpReceive(JSON)。
@@ -13,6 +13,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const { Readable } = require('stream');
+require('./startup-guard.js');
 
 const SCHEME = 'mchose-wallpaper';
 const PREFIX = '[mhub-wp]';
@@ -27,6 +28,11 @@ const OUT_FILE = path.join(DATA_DIR, 'dev-out.json');
 const SHOT_FILE = path.join(DATA_DIR, 'shot.png');
 const TYPE_LABEL = { scene: '场景', video: '视频', web: '网页', application: '应用' };
 const VIDEO_EXT = ['.mp4', '.webm', '.mov', '.mkv'];
+const IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
+const MAX_MANUAL_DEPTH = 4;
+const MAX_MANUAL_DIRS = 500;
+const VERSION = '4.0';
+const AUTHOR = '顾小颜';
 
 function ensureDir(dir) {
   try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { /* ignore */ }
@@ -99,7 +105,10 @@ const DEFAULT_SPLASH = {
   accessLevel: '03',
   accent: '#1f63ff',
   glitchA: '#ff3b30',
-  glitchB: '#2971b8'
+  glitchB: '#2971b8',
+  /* 分阶段开关：intro(黑幕→洗白) / setup(品牌块进入) / steps(5步授权) / welcome(终幕)。
+     全部 false 时直接收窗，跳过全部动画。 */
+  stages: { intro: true, setup: true, steps: true, welcome: true }
 };
 
 const DEFAULT_HOTKEYS = {
@@ -110,11 +119,29 @@ const DEFAULT_HOTKEYS = {
   preview: ''
 };
 
+const DEFAULT_SCENE_PERFORMANCE = {
+  preset: 'balanced',
+  fps: 30,
+  renderDpr: 1,
+  videoTexScale: 0.75,
+  pauseWhenHidden: true
+};
+
 const state = {
   items: [],
   byId: new Map(),
+  libraries: [],
+  manualLibraries: [],
+  libraryStates: Object.create(null),
+  favorites: [],
+  recent: [],
+  rotation: { enabled: false, intervalMinutes: 30, scope: 'all', lastRunAt: 0 },
+  scenePerformance: Object.assign({}, DEFAULT_SCENE_PERFORMANCE),
   bgId: '',
   enabled: false,
+  /* false：壁纸只作为背景，官方前景层（设备图标、名称、电量等）保持可见；
+     true：连官方前景层一起遮盖，只显示壁纸（旧行为，需用户在面板手动开启）。 */
+  overlayOfficial: false,
   beautify: Object.assign({}, DEFAULT_BEAUTIFY),
   splash: Object.assign({}, DEFAULT_SPLASH),
   hotkeys: Object.assign({}, DEFAULT_HOTKEYS),
@@ -128,6 +155,7 @@ const state = {
   if (!saved) return;
   state.bgId = String(saved.bgId || saved.lastApplied || '');
   state.enabled = !!saved.enabled && !!state.bgId;
+  state.overlayOfficial = !!saved.overlayOfficial;
   if (saved.beautify && typeof saved.beautify === 'object') {
     for (const key of Object.keys(DEFAULT_BEAUTIFY)) {
       if (saved.beautify[key] !== undefined) state.beautify[key] = saved.beautify[key];
@@ -143,10 +171,49 @@ const state = {
       if (typeof saved.hotkeys[key] === 'string') state.hotkeys[key] = saved.hotkeys[key];
     }
   }
+  if (saved.libraryStates && typeof saved.libraryStates === 'object') {
+    for (const key of Object.keys(saved.libraryStates)) {
+      const value = saved.libraryStates[key];
+      if (value && typeof value === 'object') state.libraryStates[key] = { enabled: value.enabled !== false };
+    }
+  }
+  if (Array.isArray(saved.manualLibraries)) {
+    const seen = new Set();
+    for (const savedLib of saved.manualLibraries) {
+      if (!savedLib || typeof savedLib.path !== 'string') continue;
+      const root = path.resolve(savedLib.path);
+      const key = root.toLowerCase();
+      if (path.parse(root).root === root || seen.has(key)) continue;
+      seen.add(key);
+      state.manualLibraries.push({
+        id: String(savedLib.id || ('manual-' + crypto.createHash('sha1').update(key).digest('hex').slice(0, 12))),
+        label: String(savedLib.label || path.basename(root)).slice(0, 80),
+        path: root,
+        source: 'manual',
+        enabled: savedLib.enabled !== false
+      });
+    }
+  }
+  if (Array.isArray(saved.favorites)) state.favorites = [...new Set(saved.favorites.map(String))].slice(0, 2000);
+  if (Array.isArray(saved.recent)) state.recent = [...new Set(saved.recent.map(String))].slice(0, 30);
+  if (saved.rotation && typeof saved.rotation === 'object') {
+    state.rotation.enabled = !!saved.rotation.enabled;
+    state.rotation.intervalMinutes = Math.min(1440, Math.max(1, Number(saved.rotation.intervalMinutes) || 30));
+    state.rotation.scope = saved.rotation.scope === 'favorites' ? 'favorites' : 'all';
+    state.rotation.lastRunAt = Number(saved.rotation.lastRunAt) || 0;
+  }
+  if (saved.scenePerformance && typeof saved.scenePerformance === 'object') {
+    const p = saved.scenePerformance;
+    state.scenePerformance.preset = /^(saver|balanced|quality)$/.test(p.preset) ? p.preset : 'balanced';
+    state.scenePerformance.fps = Math.min(120, Math.max(5, Number(p.fps) || 30));
+    state.scenePerformance.renderDpr = Math.min(2, Math.max(0.5, Number(p.renderDpr) || 1));
+    state.scenePerformance.videoTexScale = Math.min(1, Math.max(0.25, Number(p.videoTexScale) || 0.75));
+    state.scenePerformance.pauseWhenHidden = p.pauseWhenHidden !== false;
+  }
 })();
 
 /* 关闭启动动画时应完全沿用官方启动页：既不挂载自定义动画，也不拦截官方窗口关闭。
-   这个标志供 pet-hub 的关闭保护读取。 */
+   这个标志供 startup-guard.js 的关闭保护读取。 */
 function splashAnimationOn() {
   return !!(state && state.splash && state.splash.enabled !== false);
 }
@@ -163,30 +230,50 @@ function saveState() {
     fs.writeFileSync(STATE_FILE, JSON.stringify({
       bgId: state.bgId,
       enabled: state.enabled,
+      overlayOfficial: state.overlayOfficial,
       beautify: state.beautify,
       splash: state.splash,
-      hotkeys: state.hotkeys
+      hotkeys: state.hotkeys,
+      manualLibraries: state.manualLibraries,
+      libraryStates: state.libraryStates,
+      favorites: state.favorites,
+      recent: state.recent,
+      rotation: state.rotation,
+      scenePerformance: state.scenePerformance
     }, null, 2));
   } catch (e) { /* ignore */ }
 }
 
 // ---------- Wallpaper Engine 定位 ----------
 
-function steamPathFromRegistry() {
+function registryValue(key, value) {
   try {
-    const out = execFileSync('reg', ['query', 'HKCU\\Software\\Valve\\Steam', '/v', 'SteamPath'], {
+    const out = execFileSync('reg', ['query', key, '/v', value], {
       encoding: 'utf8', windowsHide: true, timeout: 3000
     });
-    const m = out.match(/SteamPath\s+REG_SZ\s+(.+)/i);
+    const re = new RegExp(value + '\\s+REG_SZ\\s+(.+)', 'i');
+    const m = out.match(re);
     if (m && m[1]) return path.win32.normalize(m[1].trim().replace(/\//g, '\\'));
   } catch (e) { /* ignore */ }
   return '';
+}
+
+function steamPathFromRegistry() {
+  const direct = registryValue('HKCU\\Software\\Valve\\Steam', 'SteamPath');
+  if (direct) return direct;
+  const exe = registryValue('HKCU\\Software\\Valve\\Steam', 'SteamExe');
+  return exe ? path.dirname(exe) : '';
 }
 
 function steamLibraries() {
   const roots = new Set();
   const reg = steamPathFromRegistry();
   if (reg) roots.add(reg);
+  /* 某些机器 HKCU 没有 SteamPath，但 HKLM 仍记录真实安装目录。 */
+  for (const key of ['HKLM\\SOFTWARE\\WOW6432Node\\Valve\\Steam', 'HKLM\\SOFTWARE\\Valve\\Steam']) {
+    const install = registryValue(key, 'InstallPath');
+    if (install) roots.add(install);
+  }
   const pf86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
   const pf = process.env.ProgramFiles || 'C:\\Program Files';
   roots.add(path.join(pf86, 'Steam'));
@@ -198,36 +285,170 @@ function steamLibraries() {
     libs.add(root);
     try {
       const vdf = fs.readFileSync(path.join(root, 'steamapps', 'libraryfolders.vdf'), 'utf8');
-      const re = /"path"\s+"([^"]+)"/g;
       let m;
-      while ((m = re.exec(vdf))) libs.add(path.win32.normalize(m[1].replace(/\\\\/g, '\\')));
+      const modern = /"path"\s+"([^"]+)"/g;
+      while ((m = modern.exec(vdf))) libs.add(path.win32.normalize(m[1].replace(/\\\\/g, '\\')));
+      /* 旧版 libraryfolders.vdf 使用 "1" "D:\\SteamLibrary" 格式。 */
+      const legacy = /"\d+"\s+"([A-Za-z]:[^"]+)"/g;
+      while ((m = legacy.exec(vdf))) libs.add(path.win32.normalize(m[1].replace(/\\\\/g, '\\')));
     } catch (e) { /* ignore */ }
   }
   return [...libs];
 }
 
-function detectEngine() {
-  for (const lib of steamLibraries()) {
-    const dir = path.join(lib, 'steamapps', 'common', 'wallpaper_engine');
-    for (const name of ['wallpaper64.exe', 'wallpaper32.exe']) {
-      const exe = path.join(dir, name);
-      if (fs.existsSync(exe)) return { dir, exe };
+function isFile(file) {
+  try { return fs.statSync(file).isFile(); } catch (e) { return false; }
+}
+
+function isDirectory(dir) {
+  try { return fs.statSync(dir).isDirectory(); } catch (e) { return false; }
+}
+
+function canonicalPath(value) {
+  try { return fs.realpathSync(value); } catch (e) { return path.resolve(value); }
+}
+
+function pathKey(value) {
+  return canonicalPath(value).toLowerCase();
+}
+
+function shortHash(value) {
+  return crypto.createHash('sha1').update(String(value)).digest('hex').slice(0, 12);
+}
+
+function insidePath(root, candidate) {
+  const rel = path.relative(canonicalPath(root), canonicalPath(candidate));
+  return !!rel && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
+}
+
+function validEngineDir(dir) {
+  if (!dir || !isDirectory(dir)) return false;
+  if (isDirectory(path.join(dir, 'projects'))) return true;
+  return ['wallpaper64.exe', 'wallpaper32.exe', 'bin\\wallpaper64.exe', 'bin\\wallpaper32.exe']
+    .some(function (name) { return isFile(path.join(dir, name)); });
+}
+
+function steamEngineDirs(lib) {
+  const dirs = [path.join(lib, 'steamapps', 'common', 'wallpaper_engine')];
+  try {
+    const acf = fs.readFileSync(path.join(lib, 'steamapps', 'appmanifest_431960.acf'), 'utf8');
+    const m = acf.match(/"installdir"\s+"([^"]+)"/i);
+    if (m && m[1]) dirs.unshift(path.join(lib, 'steamapps', 'common', m[1].replace(/\\\\/g, '\\')));
+  } catch (e) { /* ignore */ }
+  const seen = new Set();
+  return dirs.filter(function (dir) {
+    const key = pathKey(dir);
+    if (seen.has(key) || !validEngineDir(dir)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function wallpaperUninstallDirs() {
+  const dirs = new Set();
+  const roots = [
+    'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+    'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+    'HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall'
+  ];
+  for (const root of roots) {
+    let out;
+    try {
+      out = execFileSync('reg', ['query', root, '/s'], {
+        encoding: 'utf8', windowsHide: true, timeout: 5000, maxBuffer: 4 * 1024 * 1024
+      });
+    } catch (e) { continue; }
+    let display = '';
+    let install = '';
+    function flush() {
+      if (/wallpaper\s*engine/i.test(display) && install) dirs.add(path.win32.normalize(install.replace(/"/g, '').trim()));
+      display = '';
+      install = '';
+    }
+    for (const line of out.split(/\r?\n/)) {
+      if (/^HKEY_/i.test(line.trim())) { flush(); continue; }
+      let m = line.match(/^\s*DisplayName\s+REG(?:_EXPAND)?_SZ\s+(.+)$/i);
+      if (m) { display = m[1].trim(); continue; }
+      m = line.match(/^\s*InstallLocation\s+REG(?:_EXPAND)?_SZ\s+(.+)$/i);
+      if (m) install = m[1].trim();
+    }
+    flush();
+  }
+  return [...dirs];
+}
+
+function runningEngineDirs() {
+  const dirs = new Set();
+  try {
+    const script = 'Get-Process -Name wallpaper64,wallpaper32 -ErrorAction SilentlyContinue | ForEach-Object { $_.Path }';
+    const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8', windowsHide: true, timeout: 5000
+    });
+    for (const line of out.split(/\r?\n/)) {
+      const exe = line.trim();
+      if (!exe || !isFile(exe)) continue;
+      let dir = path.dirname(exe);
+      if (/^bin(?:32|64)?$/i.test(path.basename(dir))) dir = path.dirname(dir);
+      if (validEngineDir(dir)) dirs.add(dir);
+    }
+  } catch (e) { /* ignore */ }
+  return [...dirs];
+}
+
+function commonWeGameDirs() {
+  const dirs = new Set();
+  const rels = [
+    ['WeGameApps', 'wallpaper_engine'], ['WeGameApps', 'Wallpaper Engine'],
+    ['WeGame', 'wallpaper_engine'], ['WeGame', 'apps', 'wallpaper_engine'],
+    ['Tencent', 'WeGameApps', 'wallpaper_engine'], ['Tencent', 'WeGame', 'apps', 'wallpaper_engine'],
+    ['RailApps', 'wallpaper_engine']
+  ];
+  for (let n = 67; n <= 90; n++) {
+    const drive = String.fromCharCode(n) + ':\\';
+    if (!isDirectory(drive)) continue;
+    for (const rel of rels) {
+      const dir = path.join.apply(path, [drive].concat(rel));
+      if (validEngineDir(dir)) dirs.add(dir);
     }
   }
-  return null;
+  return [...dirs];
+}
+
+function additionalEngines() {
+  const result = [];
+  const seen = new Set();
+  function add(dir, forceWeGame) {
+    if (!validEngineDir(dir)) return;
+    const resolved = canonicalPath(dir);
+    const key = resolved.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    const wegame = forceWeGame || /wegame|rail|tencent/i.test(resolved);
+    result.push({ dir: resolved, source: wegame ? 'wegame' : 'auto' });
+  }
+  for (const dir of wallpaperUninstallDirs()) add(dir, false);
+  for (const dir of commonWeGameDirs()) add(dir, true);
+  for (const dir of runningEngineDirs()) add(dir, false);
+  return result;
 }
 
 // ---------- 扫描壁纸 ----------
+
+function projectFile(dir, declared) {
+  if (!declared) return '';
+  const file = path.resolve(dir, String(declared));
+  const rel = path.relative(dir, file);
+  if (!rel || rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) return '';
+  return isFile(file) ? file : '';
+}
 
 function pickPreview(dir, declared) {
   const names = [];
   if (declared) names.push(String(declared));
   names.push('preview.jpg', 'preview.gif', 'preview.png', 'preview.webp');
   for (const name of names) {
-    try {
-      const file = path.join(dir, name);
-      if (fs.statSync(file).isFile()) return file;
-    } catch (e) { /* ignore */ }
+    const file = projectFile(dir, name);
+    if (file) return file;
   }
   return '';
 }
@@ -242,85 +463,289 @@ function findVideo(dir, declared) {
   } catch (e) { /* ignore */ }
   for (const name of candidates) {
     if (VIDEO_EXT.indexOf(path.extname(name).toLowerCase()) < 0) continue;
-    try {
-      const file = path.join(dir, name);
-      if (fs.statSync(file).isFile()) return file;
-    } catch (e) { /* ignore */ }
+    const file = projectFile(dir, name);
+    if (file) return file;
   }
   return '';
 }
 
-function addProject(items, byId, dir, id) {
-  if (byId.has(id)) return;
+function makeLibrary(source, root, label, savedId) {
+  const resolved = canonicalPath(root);
+  const key = resolved.toLowerCase();
+  const pref = state.libraryStates[key];
+  const names = { steam: 'Steam', wegame: 'WeGame', auto: 'Wallpaper Engine', manual: '自定义库' };
+  return {
+    id: savedId || (source + '-' + shortHash(key)),
+    label: String(label || (names[source] + ' · ' + (path.basename(resolved) || resolved))).slice(0, 100),
+    path: resolved,
+    source: source,
+    enabled: pref ? pref.enabled : true,
+    removable: source === 'manual',
+    itemCount: 0,
+    truncated: false
+  };
+}
+
+function registerLibrary(ctx, library) {
+  const key = library.path.toLowerCase();
+  const existing = ctx.libraryByPath.get(key);
+  if (existing) return existing;
+  ctx.libraryByPath.set(key, library);
+  ctx.libraries.push(library);
+  return library;
+}
+
+function generatedProjectId(library, root, dir) {
+  const rel = path.relative(root, dir) || path.basename(dir);
+  return (library.source === 'manual' ? 'm:' : 'g:') + shortHash(library.id + '|' + rel.toLowerCase());
+}
+
+function addProject(ctx, dir, id, library) {
   const projectJson = path.join(dir, 'project.json');
+  const canonical = canonicalPath(dir);
+  if (ctx.seenProjects.has(canonical.toLowerCase())) return;
   let raw;
   try { raw = fs.readFileSync(projectJson, 'utf8'); } catch (e) { return; }
   let meta;
   try { meta = JSON.parse(stripBom(raw)); } catch (e) { return; }
-  const preview = pickPreview(dir, meta.preview);
-  if (!preview) return;
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return;
+  ctx.seenProjects.add(canonical.toLowerCase());
+
   const type = String(meta.type || '').toLowerCase();
+  const preview = pickPreview(dir, meta.preview);
   const videoFile = findVideo(dir, meta.file);
+  const declaredFile = projectFile(dir, meta.file);
+  let scenePkg = '';
+  let sceneEntry = '';
+  let webEntry = '';
+  if (type === 'scene') {
+    if (declaredFile && path.extname(declaredFile).toLowerCase() === '.pkg') scenePkg = declaredFile;
+    else sceneEntry = declaredFile;
+    if (!scenePkg) scenePkg = projectFile(dir, 'scene.pkg');
+    if (!scenePkg && !sceneEntry) sceneEntry = projectFile(dir, 'scene.json');
+  }
+  if (type === 'web') {
+    if (declaredFile && /^\.html?$/i.test(path.extname(declaredFile))) webEntry = declaredFile;
+    if (!webEntry) webEntry = projectFile(dir, 'index.html');
+  }
+  let imageFile = '';
+  if (declaredFile && IMAGE_EXT.indexOf(path.extname(declaredFile).toLowerCase()) >= 0) imageFile = declaredFile;
+  if (!imageFile) imageFile = preview;
+  const kind = (scenePkg || sceneEntry) ? 'scene' : (webEntry ? 'web' : (videoFile ? 'video' : 'image'));
+  if (!preview && !videoFile && !imageFile && !scenePkg && !sceneEntry && !webEntry) return;
+
+  if (ctx.byId.has(id)) id += ':' + shortHash(canonical).slice(0, 8);
   const item = {
     id: id,
     title: String(meta.title || path.basename(dir)).trim().slice(0, 120),
     type: type,
     typeLabel: TYPE_LABEL[type] || '壁纸',
     tags: Array.isArray(meta.tags) ? meta.tags.slice(0, 3).map(String) : [],
-    preview: SCHEME + '://img/preview/' + encodeURIComponent(id),
-    kind: videoFile ? 'video' : 'image',
+    preview: preview ? SCHEME + '://img/preview/' + encodeURIComponent(id) : '',
+    thumb: preview ? SCHEME + '://img/thumb/' + encodeURIComponent(id) : '',
+    kind: kind,
+    source: library.source,
+    libraryId: library.id,
     adult: /questionable|mature/i.test(String(meta.contentrating || ''))
   };
-  byId.set(id, { dir: dir, projectJson: projectJson, preview: preview, video: videoFile });
-  items.push(item);
+  ctx.byId.set(id, {
+    dir: canonical,
+    projectJson: projectJson,
+    preview: preview,
+    image: imageFile,
+    video: videoFile,
+    scenePkg: scenePkg,
+    sceneEntry: sceneEntry,
+    webEntry: webEntry,
+    kind: kind,
+    source: library.source,
+    libraryId: library.id
+  });
+  ctx.items.push(item);
+  library.itemCount++;
 }
 
-function scanAll() {
-  const engine = detectEngine();
-  const items = [];
-  const byId = new Map();
+function scanDirectProjects(ctx, base, library, legacyPrefix) {
+  let dirs;
+  try { dirs = fs.readdirSync(base, { withFileTypes: true }); } catch (e) { return; }
+  dirs.sort(function (a, b) { return a.name.localeCompare(b.name); });
+  for (const d of dirs) {
+    if (!d.isDirectory()) continue;
+    const dir = path.join(base, d.name);
+    const id = legacyPrefix ? legacyPrefix + d.name : generatedProjectId(library, library.path, dir);
+    addProject(ctx, dir, id, library);
+  }
+}
 
-  if (engine) {
-    for (const lib of steamLibraries()) {
-      const wdir = path.join(lib, 'steamapps', 'workshop', 'content', '431960');
-      let dirs = [];
-      try { dirs = fs.readdirSync(wdir, { withFileTypes: true }); } catch (e) { continue; }
-      for (const d of dirs) {
-        if (!d.isDirectory()) continue;
-        addProject(items, byId, path.join(wdir, d.name), 'w:' + d.name);
-      }
+function scanProjectTree(ctx, root, library) {
+  const queue = [{ dir: root, depth: 0 }];
+  const visited = new Set();
+  let count = 0;
+  while (queue.length) {
+    if (count >= MAX_MANUAL_DIRS) { library.truncated = true; break; }
+    const current = queue.shift();
+    const key = pathKey(current.dir);
+    if (visited.has(key)) continue;
+    visited.add(key);
+    count++;
+    if (isFile(path.join(current.dir, 'project.json'))) {
+      addProject(ctx, current.dir, generatedProjectId(library, root, current.dir), library);
+      continue;
     }
-    for (const rel of [['projects', 'myprojects'], ['projects', 'defaultprojects']]) {
-      const base = path.join(engine.dir, rel[0], rel[1]);
-      let dirs = [];
-      try { dirs = fs.readdirSync(base, { withFileTypes: true }); } catch (e) { continue; }
-      for (const d of dirs) {
-        if (!d.isDirectory()) continue;
-        addProject(items, byId, path.join(base, d.name), 'l:' + d.name);
+    if (current.depth >= MAX_MANUAL_DEPTH) continue;
+    let dirs;
+    try { dirs = fs.readdirSync(current.dir, { withFileTypes: true }); } catch (e) { continue; }
+    dirs.sort(function (a, b) { return a.name.localeCompare(b.name); });
+    for (const d of dirs) {
+      if (d.isDirectory() && d.name !== '.git' && d.name !== 'node_modules') {
+        queue.push({ dir: path.join(current.dir, d.name), depth: current.depth + 1 });
       }
     }
   }
+}
 
-  items.sort(function (a, b) {
+function scanAll() {
+  const ctx = { items: [], byId: new Map(), libraries: [], libraryByPath: new Map(), seenProjects: new Set() };
+  const steamRoots = steamLibraries();
+  let engineFound = false;
+
+  /* 创意工坊扫描不依赖主程序 exe 是否定位成功；旧 w:/l: ID 保持不变。 */
+  for (const root of steamRoots) {
+    const library = registerLibrary(ctx, makeLibrary('steam', root));
+    if (!library.enabled) continue;
+    const engines = steamEngineDirs(root);
+    const workshop = path.join(root, 'steamapps', 'workshop', 'content', '431960');
+    if (engines.length || isDirectory(workshop)) engineFound = true;
+    scanDirectProjects(ctx, workshop, library, 'w:');
+    for (const engine of engines) {
+      scanDirectProjects(ctx, path.join(engine, 'projects', 'myprojects'), library, 'l:');
+      scanDirectProjects(ctx, path.join(engine, 'projects', 'defaultprojects'), library, 'l:');
+    }
+  }
+
+  for (const detected of additionalEngines()) {
+    if (steamRoots.some(function (root) { return insidePath(root, detected.dir); })) continue;
+    engineFound = true;
+    const label = (detected.source === 'wegame' ? 'WeGame' : 'Wallpaper Engine') + ' · ' + path.basename(detected.dir);
+    const library = registerLibrary(ctx, makeLibrary(detected.source, detected.dir, label));
+    if (library.enabled) scanProjectTree(ctx, library.path, library);
+  }
+
+  for (const saved of state.manualLibraries) {
+    const library = makeLibrary('manual', saved.path, saved.label, saved.id);
+    if (!state.libraryStates[library.path.toLowerCase()]) library.enabled = saved.enabled !== false;
+    const registered = registerLibrary(ctx, library);
+    if (registered.enabled) scanProjectTree(ctx, registered.path, registered);
+  }
+
+  ctx.items.sort(function (a, b) {
     return String(a.title).localeCompare(String(b.title), 'zh-Hans-CN');
   });
-
-  state.items = items;
-  state.byId = byId;
-  state.error = engine ? null : { code: 'ENGINE_MISSING', message: '未检测到 Wallpaper Engine' };
+  state.items = ctx.items;
+  state.byId = ctx.byId;
+  state.libraries = ctx.libraries;
+  state.error = null;
+  if (!ctx.items.length) {
+    state.error = (engineFound || state.manualLibraries.length)
+      ? { code: 'NO_PROJECTS', message: '已检测到壁纸库，但没有可读取的壁纸项目' }
+      : { code: 'ENGINE_MISSING', message: '未检测到 Wallpaper Engine、WeGame 壁纸或自定义壁纸库' };
+  }
   state.scannedAt = Date.now();
-  if (state.bgId && !byId.has(state.bgId)) {
+  if (state.bgId && !ctx.byId.has(state.bgId)) {
     state.bgId = '';
     state.enabled = false;
     saveState();
   }
-  log('info', 'scan: ' + items.length + ' items, engine=' + (engine ? engine.dir : '(none)') + ', bg=' + state.bgId);
-  return items.length;
+  log('info', 'scan: ' + ctx.items.length + ' items, libraries=' + ctx.libraries.length + ', bg=' + state.bgId);
+  return ctx.items.length;
+}
+
+function libraryResult(wc, ok, message) {
+  if (!wc) return;
+  runIn(wc, 'window.__mhubWpLibraryResult&&window.__mhubWpLibraryResult(' + toJs({ ok: !!ok, message: String(message || '') }) + ')');
+}
+
+function refreshLibraries(wc, message) {
+  scanAll();
+  pushState();
+  pushBackground();
+  pushCropPreview();
+  for (const target of startupTargets()) injectStartup(target, true);
+  if (message) libraryResult(wc, true, message);
+}
+
+function addManualLibrary(rawPath, wc) {
+  const input = String(rawPath || '').trim();
+  if (!input) { libraryResult(wc, false, '请选择壁纸库目录'); return false; }
+  const resolved = path.resolve(input);
+  if (path.parse(resolved).root === resolved) {
+    libraryResult(wc, false, '不能直接添加磁盘根目录，请选择具体壁纸库目录');
+    return false;
+  }
+  if (!isDirectory(resolved)) { libraryResult(wc, false, '目录不存在或不可访问'); return false; }
+  const root = canonicalPath(resolved);
+  const key = root.toLowerCase();
+  if (state.manualLibraries.some(function (lib) { return pathKey(lib.path) === key; }) ||
+      state.libraries.some(function (lib) { return pathKey(lib.path) === key; })) {
+    libraryResult(wc, false, '该目录已在壁纸来源列表中');
+    return false;
+  }
+  state.manualLibraries.push({
+    id: 'manual-' + shortHash(key),
+    label: path.basename(root) || root,
+    path: root,
+    source: 'manual',
+    enabled: true
+  });
+  state.libraryStates[key] = { enabled: true };
+  saveState();
+  refreshLibraries(wc, '壁纸库已添加');
+  return true;
+}
+
+function chooseManualLibrary(wc) {
+  const el = electron();
+  if (!el || !el.dialog || typeof el.dialog.showOpenDialog !== 'function') {
+    libraryResult(wc, false, '当前环境无法打开目录选择器');
+    return;
+  }
+  el.dialog.showOpenDialog({ title: '选择 Wallpaper Engine 或壁纸项目目录', properties: ['openDirectory'] })
+    .then(function (result) {
+      if (result.canceled || !result.filePaths || !result.filePaths[0]) return;
+      addManualLibrary(result.filePaths[0], wc);
+    })
+    .catch(function (e) { libraryResult(wc, false, e && e.message ? e.message : '目录选择失败'); });
+}
+
+function updateLibrary(payload, wc) {
+  if (!payload || typeof payload !== 'object') return;
+  const id = String(payload.id || '');
+  const library = state.libraries.find(function (item) { return item.id === id; });
+  const manualIndex = state.manualLibraries.findIndex(function (item) { return item.id === id; });
+  if (!library && manualIndex < 0) { libraryResult(wc, false, '壁纸来源不存在，请刷新后重试'); return; }
+  if (payload.remove) {
+    if (manualIndex < 0) { libraryResult(wc, false, '自动检测的来源只能停用，不能移除'); return; }
+    const removed = state.manualLibraries.splice(manualIndex, 1)[0];
+    delete state.libraryStates[pathKey(removed.path)];
+    saveState();
+    refreshLibraries(wc, '已移除自定义壁纸库，磁盘文件未改动');
+    return;
+  }
+  if (payload.enabled !== undefined && library) {
+    const enabled = !!payload.enabled;
+    state.libraryStates[library.path.toLowerCase()] = { enabled: enabled };
+    if (manualIndex >= 0) state.manualLibraries[manualIndex].enabled = enabled;
+    saveState();
+    refreshLibraries(wc, enabled ? '壁纸来源已启用' : '壁纸来源已停用');
+  }
 }
 
 // ---------- 预览图 / 背景图 ----------
 
+const THUMB_CACHE_LIMIT = 32;
+const THUMB_CACHE_CHAR_LIMIT = 8 * 1024 * 1024;
 const thumbCache = new Map();
+let thumbCacheChars = 0;
 
 function electron() {
   try { return require('electron'); } catch (e) { return null; }
@@ -336,7 +761,8 @@ function imageDataUrl(file, width) {
       const size = img.getSize();
       if (size.width > width) img = img.resize({ width: width, quality: 'good' });
     }
-    return img.toDataURL();
+    /* JPEG 比 PNG dataURL 小得多，且同时降低主进程字符串和渲染进程图片缓存。 */
+    return 'data:image/jpeg;base64,' + img.toJPEG(82).toString('base64');
   } catch (e) {
     return '';
   }
@@ -344,10 +770,25 @@ function imageDataUrl(file, width) {
 
 function thumbFor(id) {
   const entry = state.byId.get(id);
-  if (!entry) return '';
-  if (thumbCache.has(id)) return thumbCache.get(id);
+  if (!entry || !entry.preview) return '';
+  if (thumbCache.has(id)) {
+    const cached = thumbCache.get(id);
+    /* Map 的插入顺序同时作为 LRU 顺序。 */
+    thumbCache.delete(id);
+    thumbCache.set(id, cached);
+    return cached;
+  }
   const url = imageDataUrl(entry.preview, 420);
-  thumbCache.set(id, url);
+  if (url && url.length <= THUMB_CACHE_CHAR_LIMIT) {
+    thumbCache.set(id, url);
+    thumbCacheChars += url.length;
+    while (thumbCache.size > THUMB_CACHE_LIMIT || thumbCacheChars > THUMB_CACHE_CHAR_LIMIT) {
+      const oldest = thumbCache.keys().next().value;
+      const value = thumbCache.get(oldest) || '';
+      thumbCache.delete(oldest);
+      thumbCacheChars -= value.length;
+    }
+  }
   return url;
 }
 
@@ -358,8 +799,12 @@ function fileType(ext) {
     '.gif': 'image/gif', '.png': 'image/png', '.jpg': 'image/jpeg',
     '.jpeg': 'image/jpeg', '.webp': 'image/webp',
     '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.mkv': 'video/x-matroska',
-    '.mp3': 'audio/mpeg', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
-    '.html': 'text/html; charset=utf-8'
+    '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4',
+    '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
+    '.html': 'text/html; charset=utf-8', '.json': 'application/json; charset=utf-8',
+    '.svg': 'image/svg+xml', '.wasm': 'application/wasm', '.glsl': 'text/plain; charset=utf-8',
+    '.frag': 'text/plain; charset=utf-8', '.vert': 'text/plain; charset=utf-8',
+    '.ttf': 'font/ttf', '.otf': 'font/otf', '.woff': 'font/woff', '.woff2': 'font/woff2'
   };
   return map[String(ext || '').toLowerCase()] || 'application/octet-stream';
 }
@@ -378,12 +823,17 @@ function readRange(file, rangeHeader, type) {
   let start = m[1] ? Number(m[1]) : 0;
   let end = m[2] ? Number(m[2]) : total - 1;
   if (!m[1] && m[2]) { start = Math.max(0, total - Number(m[2])); end = total - 1; }
-  if (start > end || start >= total) start = 0;
+  if (start > end || start >= total || end < 0) {
+    return {
+      status: 416,
+      headers: { 'Content-Type': type, 'Content-Range': 'bytes */' + total, 'Accept-Ranges': 'bytes' },
+      body: ''
+    };
+  }
   end = Math.min(end, total - 1);
   const length = end - start + 1;
-  const fd = fs.openSync(file, 'r');
-  const buf = Buffer.alloc(length);
-  try { fs.readSync(fd, buf, 0, length, start); } finally { fs.closeSync(fd); }
+  /* 必须流式返回 Range：bytes=0- 在部分视频上会覆盖整个文件，
+     原先的 Buffer.alloc(length) 会把数百 MB 视频直接留在主进程内存里。 */
   return {
     status: 206,
     headers: {
@@ -392,9 +842,43 @@ function readRange(file, rangeHeader, type) {
       'Content-Range': 'bytes ' + start + '-' + end + '/' + total,
       'Accept-Ranges': 'bytes'
     },
-    body: buf
+    body: Readable.toWeb(fs.createReadStream(file, { start: start, end: end }))
   };
 }
+
+function resolveSceneAsset(entry, rawPath) {
+  if (!entry || (entry.kind !== 'scene' && entry.kind !== 'web') || !entry.dir) return { status: 404 };
+  const raw = String(rawPath || '');
+  if (!raw || raw.length > 4096 || raw.indexOf('\\') >= 0 || raw.indexOf('\0') >= 0) return { status: 403 };
+  const parts = [];
+  const encoded = raw.split('/');
+  for (const part of encoded) {
+    let decoded;
+    try { decoded = decodeURIComponent(part); } catch (e) { return { status: 400 }; }
+    if (!decoded || decoded === '.' || decoded === '..' || /[\\/\0-\x1f]/.test(decoded)) return { status: 403 };
+    parts.push(decoded);
+  }
+
+  let root;
+  let file;
+  try {
+    root = fs.realpathSync(entry.dir);
+    file = path.resolve(root, ...parts);
+    const rel = path.relative(root, file);
+    if (!rel || rel === '..' || rel.indexOf('..' + path.sep) === 0 || path.isAbsolute(rel)) return { status: 403 };
+    /* realpath 同时拦住项目目录里指向库外的符号链接。 */
+    file = fs.realpathSync(file);
+    const realRel = path.relative(root, file);
+    if (!realRel || realRel === '..' || realRel.indexOf('..' + path.sep) === 0 || path.isAbsolute(realRel)) return { status: 403 };
+    if (!fs.statSync(file).isFile()) return { status: 404 };
+  } catch (e) {
+    return { status: 404 };
+  }
+  return { status: 200, file: file };
+}
+
+/* 普通包内资源只采样前几条，project.json/scene.pkg 与异常始终记录。 */
+let sceneAssetLogCount = 0;
 
 function installProtocol(el) {
   if (!el || !el.protocol || typeof el.protocol.handle !== 'function') return;
@@ -403,7 +887,9 @@ function installProtocol(el) {
     try {
       const url = new URL(request.url);
       const host = url.hostname;
-      const rel = decodeURIComponent(url.pathname || '/').replace(/^\/+/, '');
+      const rawRel = (url.pathname || '/').replace(/^\/+/, '');
+      /* 场景资源逐段解码并返回精确状态码，不能在进入分支前统一解码。 */
+      const rel = host === 'scene' ? rawRel : decodeURIComponent(rawRel);
 
       if (host === 'img') {
         const m = rel.match(/^(preview|thumb|full)\/(.+)$/);
@@ -413,16 +899,26 @@ function installProtocol(el) {
         if (!entry) return new Response('', { status: 404 });
         if (m[1] === 'thumb') {
           const dataUrl = thumbFor(id);
-          if (!dataUrl) return new Response('', { status: 404 });
-          const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
-          return new Response(Buffer.from(base64, 'base64'), {
-            headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' }
-          });
+          if (dataUrl) {
+            const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+            return new Response(Buffer.from(base64, 'base64'), {
+              headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' }
+            });
+          }
+          /* nativeImage 不认识部分 WebP/GIF 编码时，回退给 Chromium 直接解码原图，
+             不能因为缩略图生成失败就让整个卡片变空白。 */
         }
-        let data;
-        try { data = await fs.promises.readFile(entry.preview); } catch (e) { return new Response('', { status: 404 }); }
-        return new Response(data, {
-          headers: { 'Content-Type': fileType(path.extname(entry.preview)), 'Cache-Control': 'public, max-age=86400' }
+        const imageFile = m[1] === 'full' ? (entry.image || entry.preview) : entry.preview;
+        if (!imageFile) return new Response('', { status: 404 });
+        let r;
+        try {
+          r = readRange(imageFile, request.headers.get('range'), fileType(path.extname(imageFile)));
+        } catch (e) {
+          return new Response('', { status: 404 });
+        }
+        return new Response(r.body, {
+          status: r.status,
+          headers: Object.assign({ 'Cache-Control': 'public, max-age=86400' }, r.headers)
         });
       }
 
@@ -433,6 +929,57 @@ function installProtocol(el) {
         if (!entry || !entry.video) return new Response('', { status: 404 });
         const r = readRange(entry.video, request.headers.get('range'), fileType(path.extname(entry.video)));
         return new Response(r.body, { status: r.status, headers: r.headers });
+      }
+
+      if (host === 'scene') {
+        /* 仅暴露已入库项目的目录；ID 与资源路径分别解码，禁止编码斜线和穿越段。 */
+        const m = rawRel.match(/^project\/([^/]+)\/(.+)$/);
+        if (!m) {
+          log('warn', 'scene request invalid url=' + request.url.slice(0, 1000));
+          return new Response('', { status: 404 });
+        }
+        let id;
+        try { id = decodeURIComponent(m[1]); } catch (e) { return new Response('', { status: 400 }); }
+        if (!id || /[\\/\0]/.test(id)) return new Response('', { status: 403 });
+        const keyResource = m[2] === 'project.json' || m[2] === 'scene.pkg';
+        const sampled = keyResource || sceneAssetLogCount < 12;
+        if (!keyResource && sampled) sceneAssetLogCount++;
+        const range = String(request.headers.get('range') || '').slice(0, 80);
+        if (sampled) {
+          log('info', 'scene request id=' + id + ' rel=' + m[2].slice(0, 500) +
+            ' method=' + request.method + ' range=' + (range || '-') + ' url=' + request.url.slice(0, 1000));
+        }
+        if (request.method === 'OPTIONS') {
+          if (sampled) log('info', 'scene response id=' + id + ' rel=' + m[2].slice(0, 500) + ' status=204 preflight');
+          return new Response('', {
+            status: 204,
+            headers: {
+              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+              'Access-Control-Allow-Headers': 'Range, Content-Type',
+              'Access-Control-Max-Age': '3600',
+              'Cache-Control': 'no-store'
+            }
+          });
+        }
+        const resolved = resolveSceneAsset(state.byId.get(id), m[2]);
+        if (resolved.status !== 200) {
+          log('warn', 'scene resolve id=' + id + ' rel=' + m[2].slice(0, 500) + ' status=' + resolved.status);
+          return new Response('', { status: resolved.status, headers: { 'Access-Control-Allow-Origin': '*' } });
+        }
+        const r = readRange(resolved.file, range, fileType(path.extname(resolved.file)));
+        const headers = Object.assign({
+          'Cache-Control': 'public, max-age=3600',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Expose-Headers': 'Content-Type, Content-Length, Content-Range, Accept-Ranges',
+          'X-Content-Type-Options': 'nosniff'
+        }, r.headers);
+        if (sampled || r.status >= 400) {
+          log(r.status >= 400 ? 'warn' : 'info', 'scene response id=' + id + ' rel=' + m[2].slice(0, 500) +
+            ' status=' + r.status + ' length=' + String(r.headers['Content-Length'] || '-') +
+            ' contentRange=' + String(r.headers['Content-Range'] || '-'));
+        }
+        return new Response(r.body, { status: r.status, headers: headers });
       }
 
       if (host === 'splash') {
@@ -464,8 +1011,8 @@ function installProtocol(el) {
 
       return new Response('', { status: 404 });
     } catch (e) {
-      log('warn', 'protocol error: ' + (e && e.message));
-      return new Response('', { status: 500 });
+      log('warn', 'protocol error: ' + String(e && (e.stack || e.message) || e).slice(0, 2000));
+      return new Response('', { status: 500, headers: { 'Access-Control-Allow-Origin': '*' } });
     }
   });
 }
@@ -474,10 +1021,18 @@ function installProtocol(el) {
 
 function snapshot() {
   return {
-    v: 2,
+    v: 3,
+    version: VERSION,
+    author: AUTHOR,
     items: state.items,
+    libraries: state.libraries,
     bgId: state.bgId,
     enabled: state.enabled,
+    overlayOfficial: state.overlayOfficial,
+    favorites: state.favorites,
+    recent: state.recent,
+    rotation: state.rotation,
+    scenePerformance: state.scenePerformance,
     beautify: state.beautify,
     splash: state.splash,
     hotkeys: state.hotkeys,
@@ -526,11 +1081,14 @@ function pushState(target) {
 function backgroundMedia() {
   const entry = state.byId.get(state.bgId);
   if (!entry) return null;
+  const kind = entry.kind || (entry.video ? 'video' : 'image');
   return {
     id: state.bgId,
-    kind: entry.video ? 'video' : 'image',
-    image: SCHEME + '://img/full/' + encodeURIComponent(state.bgId),
-    video: entry.video ? (SCHEME + '://media/video/' + encodeURIComponent(state.bgId)) : ''
+    kind: kind,
+    image: entry.preview || entry.image ? SCHEME + '://img/full/' + encodeURIComponent(state.bgId) : '',
+    video: kind === 'video' && entry.video ? (SCHEME + '://media/video/' + encodeURIComponent(state.bgId)) : '',
+    sceneBase: kind === 'scene' || kind === 'web' ? SCHEME + '://scene/project/' + encodeURIComponent(state.bgId) + '/' : '',
+    performance: state.scenePerformance
   };
 }
 
@@ -729,7 +1287,7 @@ function startupTargets() {
    所有窗口（含真实启动页与预览窗口）均可访问。 */
 function startupBgUrl(id) {
   const entry = state.byId.get(id);
-  if (!entry) return '';
+  if (!entry || !entry.preview) return '';
   return SCHEME + '://img/preview/' + encodeURIComponent(id);
 }
 
@@ -743,7 +1301,7 @@ function splashBg() {
   if (!entry) return null;
   /* 视频壁纸优先用视频本身：preview 一般是 1024px 以下的小图，
      放到全屏启动页里放大后会明显发糊；视频是原始分辨率，清晰得多。 */
-  if (entry.video) {
+  if (entry.kind === 'video' || (!entry.kind && entry.video)) {
     return {
       kind: 'video',
       id: id,
@@ -899,8 +1457,9 @@ function setBackground(id) {
   if (!entry) { log('warn', 'set: unknown id ' + id); return; }
   state.bgId = id;
   state.enabled = true;
+  state.recent = [id].concat(state.recent.filter(function (recentId) { return recentId !== id; })).slice(0, 30);
   saveState();
-  log('info', 'set background ' + id + ' (' + (entry.video ? 'video' : 'image') + ')');
+  log('info', 'set background ' + id + ' (' + (entry.kind || 'image') + ')');
   pushBackground();
   pushState();
   pushCropPreview();
@@ -915,6 +1474,65 @@ function resetBackground() {
   pushBackground();
   pushState();
   for (const wc of startupTargets()) injectStartup(wc, true);
+}
+
+function updateFavorite(payload) {
+  const id = String(payload && payload.id || '');
+  if (!state.byId.has(id)) return;
+  const index = state.favorites.indexOf(id);
+  const favorite = payload.favorite === undefined ? index < 0 : !!payload.favorite;
+  if (favorite && index < 0) state.favorites.push(id);
+  if (!favorite && index >= 0) state.favorites.splice(index, 1);
+  saveState();
+  pushState();
+}
+
+const SCENE_PRESETS = {
+  saver: { fps: 15, renderDpr: 0.75, videoTexScale: 0.5 },
+  balanced: { fps: 30, renderDpr: 1, videoTexScale: 0.75 },
+  quality: { fps: 60, renderDpr: 1.5, videoTexScale: 1 }
+};
+
+function updateScenePerformance(patch) {
+  if (!patch || typeof patch !== 'object') return;
+  const preset = /^(saver|balanced|quality)$/.test(patch.preset) ? patch.preset : state.scenePerformance.preset;
+  Object.assign(state.scenePerformance, SCENE_PRESETS[preset], { preset: preset });
+  if (patch.pauseWhenHidden !== undefined) state.scenePerformance.pauseWhenHidden = !!patch.pauseWhenHidden;
+  saveState();
+  pushState();
+  pushBackground();
+}
+
+let rotationTimer = null;
+
+function scheduleRotation() {
+  if (rotationTimer) { clearInterval(rotationTimer); rotationTimer = null; }
+  if (!state.rotation.enabled) return;
+  rotationTimer = setInterval(function () {
+    const rotation = state.rotation;
+    const interval = Math.min(1440, Math.max(1, Number(rotation.intervalMinutes) || 30)) * 60000;
+    const now = Date.now();
+    if (now - (Number(rotation.lastRunAt) || 0) < interval) return;
+    rotation.lastRunAt = now;
+    randomBackground(rotation.scope);
+    saveState();
+  }, 15000);
+}
+
+function updateRotation(patch) {
+  if (!patch || typeof patch !== 'object') return;
+  const r = state.rotation;
+  const wasEnabled = r.enabled;
+  const oldInterval = r.intervalMinutes;
+  if (patch.enabled !== undefined) r.enabled = !!patch.enabled;
+  if (patch.intervalMinutes !== undefined && isFinite(Number(patch.intervalMinutes))) {
+    r.intervalMinutes = Math.min(1440, Math.max(1, Number(patch.intervalMinutes)));
+  }
+  if (patch.scope !== undefined) r.scope = patch.scope === 'favorites' ? 'favorites' : 'all';
+  if ((r.enabled && !wasEnabled) || r.intervalMinutes !== oldInterval) r.lastRunAt = Date.now();
+  saveState();
+  scheduleRotation();
+  pushState();
 }
 
 function updateBeautify(patch) {
@@ -953,6 +1571,19 @@ function updateSplash(patch) {
   for (const key of bools) {
     if (patch[key] !== undefined) s[key] = !!patch[key];
   }
+  /* stages：只覆盖传入的键，未传的保留原值；确保最终有完整四键 */
+  if (patch.stages && typeof patch.stages === 'object') {
+    const def = DEFAULT_SPLASH.stages;
+    const cur = s.stages || {};
+    s.stages = {
+      intro: patch.stages.intro !== undefined ? !!patch.stages.intro : (cur.intro !== false),
+      setup: patch.stages.setup !== undefined ? !!patch.stages.setup : (cur.setup !== false),
+      steps: patch.stages.steps !== undefined ? !!patch.stages.steps : (cur.steps !== false),
+      welcome: patch.stages.welcome !== undefined ? !!patch.stages.welcome : (cur.welcome !== false)
+    };
+  } else if (!s.stages || typeof s.stages !== 'object') {
+    s.stages = Object.assign({}, DEFAULT_SPLASH.stages);
+  }
   if (patch.bgMode !== undefined && /^(follow|custom|color|off)$/.test(patch.bgMode)) s.bgMode = patch.bgMode;
   if (patch.theme !== undefined && /^(auto|light|dark)$/.test(patch.theme)) s.theme = patch.theme;
   if (patch.voiceSource !== undefined) s.voiceSource = patch.voiceSource === 'tts' ? 'tts' : 'asset';
@@ -982,9 +1613,20 @@ function previewSplash() {
       return 'focused';
     }
   } catch (e) { /* ignore */ }
-  const html = path.join(process.resourcesPath || path.join(__dirname, '..', '..'), 'app.asar.unpacked', 'bundled', 'renderer', 'startup-loading.html');
+  const resPath = process.resourcesPath || path.join(__dirname, '..', '..');
+  /* 多路径兼容：插件自己的副本 > 官方 asar.unpacked > asar 内部（Electron 自动解） */
+  const htmlCandidates = [
+    path.join(__dirname, 'splash', 'startup-loading.html'),          /* 插件 payload 自带副本 */
+    path.join(resPath, 'app.asar.unpacked', 'bundled', 'renderer', 'startup-loading.html'),
+    path.join(resPath, 'app.mhub-wallpaper-original.asar.unpacked', 'bundled', 'renderer', 'startup-loading.html'),
+    path.join(resPath, 'app.asar', 'bundled', 'renderer', 'startup-loading.html')
+  ];
+  let html = '';
+  for (const cand of htmlCandidates) {
+    if (fs.existsSync(cand)) { html = cand; break; }
+  }
   try {
-    if (!fs.existsSync(html)) return 'no splash html';
+    if (!html) return 'no splash html (checked ' + htmlCandidates.length + ' paths)';
     const theme = state.splash.theme === 'light' ? 'light' : 'dark';
     const win = new el.BrowserWindow({
       width: 1180,
@@ -1025,7 +1667,10 @@ function previewSplash() {
 
 let payloadCode = '';
 let payloadHash = '';
-let payloadAt = 0;
+let payloadAt = '';
+let scenePayloadCode = '';
+let scenePayloadHash = '';
+let scenePayloadAt = '';
 
 function buildPayload() {
   try {
@@ -1034,12 +1679,12 @@ function buildPayload() {
     try {
       if (fs.statSync(override).isFile()) file = override;
     } catch (e) { /* ignore */ }
-    const st = fs.statSync(file);
-    if (payloadCode && payloadAt === st.mtimeMs) return { code: payloadCode, hash: payloadHash };
+    const signature = file + ':' + fs.statSync(file).mtimeMs;
+    if (payloadCode && payloadAt === signature) return { code: payloadCode, hash: payloadHash };
     const code = fs.readFileSync(file, 'utf8');
     payloadHash = crypto.createHash('sha1').update(code).digest('hex').slice(0, 12);
     payloadCode = '(function(){try{\n' + code + '\n}catch(e){try{console.dir("[mhub-wp]"+JSON.stringify({t:"error",where:"shell",message:String(e&&e.message)}))}catch(_){}}})();';
-    payloadAt = st.mtimeMs;
+    payloadAt = signature;
     return { code: payloadCode, hash: payloadHash };
   } catch (e) {
     log('error', 'shell.js missing: ' + (e && e.message));
@@ -1047,8 +1692,32 @@ function buildPayload() {
   }
 }
 
+function buildSceneRuntime() {
+  try {
+    const vendorFile = path.join(__dirname, 'vendor', 'webwallgl', 'webwallgl.global.min.js');
+    const sceneFile = path.join(RENDERER_DIR, 'scene.js');
+    /* 仅场景/网页壁纸按需加载；普通图片和视频不保留 WebWallGL 的 JS/纹理缓存。 */
+    const files = [sceneFile, vendorFile];
+    const signature = files.map(function (name) { return name + ':' + fs.statSync(name).mtimeMs; }).join('|');
+    if (scenePayloadCode && scenePayloadAt === signature) return { code: scenePayloadCode, hash: scenePayloadHash };
+    const code = files.map(function (name) { return fs.readFileSync(name, 'utf8'); }).join('\n;\n');
+    scenePayloadHash = crypto.createHash('sha1').update(code).digest('hex').slice(0, 12);
+    scenePayloadCode = '(function(){try{\n' + code +
+      '\n;return {ok:!!(window.__mhubWpScene&&window.WebWallGL),version:window.__mhubWpScene&&window.__mhubWpScene.version||""};' +
+      '}catch(e){return {ok:false,error:String(e&&e.message||e)};}})();';
+    scenePayloadAt = signature;
+    return { code: scenePayloadCode, hash: scenePayloadHash };
+  } catch (e) {
+    log('error', 'scene runtime missing: ' + (e && e.message));
+    return null;
+  }
+}
+
 const attached = new Set();
 const injectedHash = new Map();
+const sceneRuntimeHash = new Map();
+const sceneRuntimePending = new Map();
+const sceneRuntimeEpoch = new Map();
 
 function isTarget(wc) {
   try {
@@ -1076,6 +1745,44 @@ function inject(wc) {
   } catch (e) {
     log('warn', 'inject threw: ' + (e && e.message));
   }
+}
+
+function injectSceneRuntime(wc) {
+  const payload = buildSceneRuntime();
+  if (!payload || !isTarget(wc)) return;
+  const epoch = sceneRuntimeEpoch.get(wc.id) || 0;
+  if (sceneRuntimeHash.get(wc.id) === payload.hash) {
+    runIn(wc, 'window.__mhubWpSceneRuntimeReady&&window.__mhubWpSceneRuntimeReady()');
+    return;
+  }
+  const pending = sceneRuntimePending.get(wc.id);
+  if (pending && pending.hash === payload.hash && pending.epoch === epoch) return;
+  sceneRuntimePending.set(wc.id, { hash: payload.hash, epoch: epoch });
+  let execution;
+  try {
+    execution = wc.executeJavaScript(payload.code, false);
+  } catch (e) {
+    sceneRuntimePending.delete(wc.id);
+    log('warn', 'scene runtime inject threw wc=' + wc.id + ': ' + (e && e.message));
+    runIn(wc, 'window.__mhubWpSceneRuntimeError&&window.__mhubWpSceneRuntimeError(' + toJs(String(e && e.message || e)) + ')');
+    return;
+  }
+  Promise.resolve(execution).then(function (result) {
+    const current = sceneRuntimePending.get(wc.id);
+    if (current && current.epoch === epoch) sceneRuntimePending.delete(wc.id);
+    if ((sceneRuntimeEpoch.get(wc.id) || 0) !== epoch || !isTarget(wc)) return;
+    if (!result || !result.ok) throw new Error(result && result.error || 'WebWallGL unavailable');
+    sceneRuntimeHash.set(wc.id, payload.hash);
+    log('info', 'scene runtime injected wc=' + wc.id + ' hash=' + payload.hash + ' version=' + result.version);
+    runIn(wc, 'window.__mhubWpSceneRuntimeReady&&window.__mhubWpSceneRuntimeReady()');
+  }).catch(function (e) {
+    const current = sceneRuntimePending.get(wc.id);
+    if (current && current.epoch === epoch) sceneRuntimePending.delete(wc.id);
+    if ((sceneRuntimeEpoch.get(wc.id) || 0) !== epoch || !isTarget(wc)) return;
+    const message = String(e && e.message || e).slice(0, 300);
+    log('warn', 'scene runtime inject failed wc=' + wc.id + ': ' + message);
+    runIn(wc, 'window.__mhubWpSceneRuntimeError&&window.__mhubWpSceneRuntimeError(' + toJs(message) + ')');
+  });
 }
 
 let splashMaxPending = false;
@@ -1176,7 +1883,33 @@ function handleUplink(raw, wc) {  let msg;
   }
   if (t === 'set') { setBackground(msg.payload && msg.payload.id); return; }
   if (t === 'reset') { resetBackground(); return; }
+  if (t === 'favorite') { updateFavorite(msg.payload); return; }
+  if (t === 'rotation') { updateRotation(msg.payload); return; }
+  if (t === 'scenePerformance') { updateScenePerformance(msg.payload); return; }
+  if (t === 'sceneRuntimeNeeded') {
+    const id = msg.payload && msg.payload.id;
+    const entry = state.byId.get(id);
+    if (id === state.bgId && entry && (entry.kind === 'scene' || entry.kind === 'web')) injectSceneRuntime(wc);
+    return;
+  }
+  if (t === 'sceneStatus') {
+    const p = msg.payload || {};
+    log(p.level === 'info' ? 'info' : 'warn', 'scene: ' + JSON.stringify({
+      id: p.id || '', phase: p.phase || '', status: p.status,
+      url: String(p.url || '').slice(0, 1000), message: String(p.message || 'unknown').slice(0, 500)
+    }));
+    return;
+  }
   if (t === 'beautify') { updateBeautify(msg.payload); return; }
+  if (t === 'overlayOfficial') {
+    const value = msg.payload || {};
+    state.overlayOfficial = !!value.enabled;
+    saveState();
+    log('info', 'overlay official layer: ' + (state.overlayOfficial ? 'on' : 'off'));
+    pushState();
+    pushBackground();
+    return;
+  }
   if (t === 'hotkeys') { updateHotkeys(msg.payload); return; }
   if (t === 'splash') { updateSplash(msg.payload); return; }
   if (t === 'splashPreview') { log('info', 'splash preview: ' + previewSplash()); return; }
@@ -1186,7 +1919,10 @@ function handleUplink(raw, wc) {  let msg;
     else closeCropWindow();
     return;
   }
-  if (t === 'refresh') { scanAll(); pushState(); if (state.bgId) pushBackground(); return; }
+  if (t === 'refresh') { refreshLibraries(); return; }
+  if (t === 'libraryAdd') { addManualLibrary(msg.payload && msg.payload.path, wc); return; }
+  if (t === 'libraryChoose') { chooseManualLibrary(wc); return; }
+  if (t === 'libraryUpdate') { updateLibrary(msg.payload, wc); return; }
   if (t === 'thumb') { pushThumb(wc, msg.payload && msg.payload.id); return; }
   if (t === 'error') { log('warn', 'page: ' + JSON.stringify(msg).slice(0, 400)); return; }
 }
@@ -1195,6 +1931,14 @@ function attach(wc) {
   if (!wc) return;
   if (!attached.has(wc.id)) {
     attached.add(wc.id);
+    /* 启动页配置必须在 splash.js 加载前就位。
+       attach 绑定在 'web-contents-created' 事件——窗口刚创建时 URL 是 about:blank，
+       isStartup(wc) 判断不出来，所以**无条件**对所有新 wc 注入配置：
+       executeJavaScript 在窗口还没 load 时也不会报错，只是排队等 DOM ready 执行。
+       splash.js 是 HTML 里的同步 <script>，解析到标签时才执行，那时配置已在 window 上。 */
+    try {
+      runIn(wc, 'try{window.__MHUBSplashConfig=' + toJs(state.splash) + ';}catch(e){}');
+    } catch (e) { /* ignore — 极少数情况下窗口已销毁 */ }
     try {
       wc.on('console-message', function () {
         const args = Array.prototype.slice.call(arguments);
@@ -1214,6 +1958,9 @@ function attach(wc) {
     try {
       wc.on('did-finish-load', function () {
         injectedHash.delete(wc.id);
+        sceneRuntimeHash.delete(wc.id);
+        sceneRuntimePending.delete(wc.id);
+        sceneRuntimeEpoch.set(wc.id, (sceneRuntimeEpoch.get(wc.id) || 0) + 1);
         if (isTarget(wc)) setTimeout(function () { inject(wc); }, 250);
       });
     } catch (e) { /* ignore */ }
@@ -1221,6 +1968,9 @@ function attach(wc) {
       wc.on('destroyed', function () {
         attached.delete(wc.id);
         injectedHash.delete(wc.id);
+        sceneRuntimeHash.delete(wc.id);
+        sceneRuntimePending.delete(wc.id);
+        sceneRuntimeEpoch.delete(wc.id);
       });
     } catch (e) { /* ignore */ }
     try {
@@ -1283,6 +2033,41 @@ async function runCommand(cmd) {
       return 'shot error: ' + (e && e.message);
     }
   }
+  if (cmd && cmd.cmd === 'memory') {
+    try {
+      const targets = targetWebContents();
+      const targetStats = [];
+      for (const wc of targets) {
+        try {
+          const value = await wc.executeJavaScript('(function(){var p=performance.memory||{};var w=window.__mhubWallpaper;return {url:location.href,usedJSHeapBytes:p.usedJSHeapSize||0,totalJSHeapBytes:p.totalJSHeapSize||0,webWallGL:!!window.WebWallGL,wallpaper:w&&w.memoryInfo?w.memoryInfo():null};})()', false);
+          targetStats.push({ id: wc.id, stats: value });
+        } catch (e) {
+          targetStats.push({ id: wc.id, error: String(e && e.message || e) });
+        }
+      }
+      const metrics = typeof el.app.getAppMetrics === 'function' ? el.app.getAppMetrics() : [];
+      return JSON.stringify({
+        capturedAt: new Date().toISOString(),
+        main: { pid: process.pid, memoryUsage: process.memoryUsage() },
+        appMetrics: metrics.map(function (m) {
+          return {
+            pid: m.pid,
+            type: m.type,
+            memory: m.memory || null,
+            workingSetMB: m.memory && m.memory.workingSetSize ? Math.round(m.memory.workingSetSize / 1024 * 100) / 100 : null
+          };
+        }),
+        wallpaper: {
+          thumbEntries: thumbCache.size,
+          thumbChars: thumbCacheChars,
+          sceneRuntimeTargets: sceneRuntimeHash.size,
+          targets: targetStats
+        }
+      });
+    } catch (e) {
+      return 'memory error: ' + (e && e.message);
+    }
+  }
   if (cmd && cmd.cmd === 'hotkey') {
     try {
       if (cmd.action === 'random') return 'random=' + randomBackground();
@@ -1334,14 +2119,18 @@ function cycleBackground(step) {
   return next.id;
 }
 
-function randomBackground() {
-  const list = state.items;
+function randomBackground(scope) {
+  const favorites = new Set(state.favorites);
+  const list = scope === 'favorites'
+    ? state.items.filter(function (item) { return favorites.has(item.id); })
+    : state.items;
   if (!list.length) return 'empty';
   const pool = list.filter(function (it) { return it.id !== state.bgId; });
-  const pick = (pool.length ? pool : list)[Math.floor(Math.random() * (pool.length ? pool.length : list.length))];
+  const candidates = pool.length ? pool : list;
+  const pick = candidates[Math.floor(Math.random() * candidates.length)];
   if (!pick) return 'none';
   setBackground(pick.id);
-  log('info', 'hotkey random -> ' + pick.id);
+  log('info', 'random (' + (scope === 'favorites' ? 'favorites' : 'all') + ') -> ' + pick.id);
   return pick.id;
 }
 
@@ -1399,10 +2188,20 @@ function updateHotkeys(patch) {
   pushState();
 }
 
+const registeredHotkeys = new Set();
+
+function unregisterWallpaperHotkeys(el) {
+  if (!el || !el.globalShortcut) return;
+  for (const accel of registeredHotkeys) {
+    try { el.globalShortcut.unregister(accel); } catch (e) { /* ignore */ }
+  }
+  registeredHotkeys.clear();
+}
+
 function registerHotkeys() {
   const el = electron();
   if (!el || !el.globalShortcut) return;
-  try { el.globalShortcut.unregisterAll(); } catch (e) { /* ignore */ }
+  unregisterWallpaperHotkeys(el);
   const errors = [];
   const used = {};
   for (const action of Object.keys(HOTKEY_ACTIONS)) {
@@ -1412,7 +2211,8 @@ function registerHotkeys() {
     used[accel] = true;
     try {
       const ok = el.globalShortcut.register(accel, HOTKEY_ACTIONS[action]);
-      if (!ok) errors.push({ action: action, accel: accel, reason: 'occupied' });
+      if (ok) registeredHotkeys.add(accel);
+      else errors.push({ action: action, accel: accel, reason: 'occupied' });
     } catch (e) {
       errors.push({ action: action, accel: accel, reason: 'error' });
     }
@@ -1422,9 +2222,7 @@ function registerHotkeys() {
   if (!hotkeysDone) {
     hotkeysDone = true;
     try {
-      el.app.on('will-quit', function () {
-        try { el.globalShortcut.unregisterAll(); } catch (e) { /* ignore */ }
-      });
+      el.app.on('will-quit', function () { unregisterWallpaperHotkeys(el); });
     } catch (e) { /* ignore */ }
   }
 }
@@ -1440,7 +2238,7 @@ function boot() {
     if (el.protocol && !app.isReady() && typeof el.protocol.registerSchemesAsPrivileged === 'function') {
       el.protocol.registerSchemesAsPrivileged([{
         scheme: SCHEME,
-        privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true }
+        privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true }
       }]);
     }
   } catch (e) { log('warn', 'scheme register failed: ' + (e && e.message)); }
@@ -1448,6 +2246,7 @@ function boot() {
   const start = function () {
     installProtocol(el);
     scanAll();
+    scheduleRotation();
 
     try {
       app.on('web-contents-created', function (_e, wc) { attach(wc); });

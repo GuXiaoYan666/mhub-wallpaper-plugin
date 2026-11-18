@@ -1,0 +1,38 @@
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+body {
+  position: relative;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+  -webkit-app-region: no-drag;
+}
+
+/* Anchored by its bottom edge: the native window grows from the same point (lib/pet-window.js),
+   so the pet scales in place instead of sliding out of its own frame. The left offset and the
+   CSS size are written per frame by pet.js so that the bitmap maps 1:1 onto device pixels. */
+#pet,
+#pet-gl {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  display: block;
+  width: 192px;
+  height: 328px;
+  transform-origin: bottom center;
+  outline: none;
+  -webkit-user-drag: none;
+}
+
+/* GPU 精灵层压在 #pet 之下：HUD 仍由 2D 画布画在上面。 */
+#pet-gl {
+  pointer-events: none;
+}
