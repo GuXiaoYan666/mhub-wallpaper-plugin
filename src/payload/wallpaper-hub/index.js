@@ -70,7 +70,8 @@ const DEFAULT_BEAUTIFY = {
   motion: 'none',
   speed: 1,
   nativeBlur: 0,
-  nativeBrightness: 50
+  nativeBrightness: 50,
+  deviceBlur: 12
 };
 
 const DEFAULT_SPLASH = {
@@ -817,8 +818,7 @@ function readRange(file, rangeHeader, type) {
     return {
       status: 200,
       headers: { 'Content-Type': type, 'Content-Length': String(total), 'Accept-Ranges': 'bytes' },
-      body: Readable.toWeb(fs.createReadStream(file))
-    };
+      body: fs.createReadStream(file)    };
   }
   let start = m[1] ? Number(m[1]) : 0;
   let end = m[2] ? Number(m[2]) : total - 1;
@@ -827,7 +827,7 @@ function readRange(file, rangeHeader, type) {
     return {
       status: 416,
       headers: { 'Content-Type': type, 'Content-Range': 'bytes */' + total, 'Accept-Ranges': 'bytes' },
-      body: ''
+      body: Buffer.alloc(0)
     };
   }
   end = Math.min(end, total - 1);
@@ -842,7 +842,7 @@ function readRange(file, rangeHeader, type) {
       'Content-Range': 'bytes ' + start + '-' + end + '/' + total,
       'Accept-Ranges': 'bytes'
     },
-    body: Readable.toWeb(fs.createReadStream(file, { start: start, end: end }))
+    body: fs.createReadStream(file, { start: start, end: end })
   };
 }
 
@@ -880,11 +880,24 @@ function resolveSceneAsset(entry, rawPath) {
 /* 普通包内资源只采样前几条，project.json/scene.pkg 与异常始终记录。 */
 let sceneAssetLogCount = 0;
 
-function installProtocol(el) {
-  if (!el || !el.protocol || typeof el.protocol.handle !== 'function') return;
-  try { el.protocol.unhandle(SCHEME); } catch (e) { /* ignore */ }
-  el.protocol.handle(SCHEME, async function (request) {
-    try {
+/* 路由结果统一用 {status, headers, body} 表示；body 为 Buffer / Node Readable。
+   新版 Electron 在 installProtocol 里转成 Response，旧版直接交给 registerStreamProtocol。 */
+function part(status, headers, body) {
+  return { status: status, headers: headers || {}, body: body == null ? Buffer.alloc(0) : body };
+}
+
+/* 新版 request.headers 是 Headers 实例，旧版 registerStreamProtocol 是普通对象。 */
+function headerOf(request, name) {
+  try {
+    const h = request && request.headers;
+    if (!h) return '';
+    if (typeof h.get === 'function') return h.get(name) || '';
+    return h[name] || h[name.toLowerCase()] || '';
+  } catch (e) { return ''; }
+}
+
+async function serveScheme(request) {
+  try {
       const url = new URL(request.url);
       const host = url.hostname;
       const rawRel = (url.pathname || '/').replace(/^\/+/, '');
@@ -893,42 +906,37 @@ function installProtocol(el) {
 
       if (host === 'img') {
         const m = rel.match(/^(preview|thumb|full)\/(.+)$/);
-        if (!m) return new Response('', { status: 404 });
+        if (!m) return part(404);
         const id = decodeURIComponent(m[2]);
         const entry = state.byId.get(id);
-        if (!entry) return new Response('', { status: 404 });
+        if (!entry) return part(404);
         if (m[1] === 'thumb') {
           const dataUrl = thumbFor(id);
           if (dataUrl) {
             const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
-            return new Response(Buffer.from(base64, 'base64'), {
-              headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' }
-            });
+            return part(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' }, Buffer.from(base64, 'base64'));
           }
           /* nativeImage 不认识部分 WebP/GIF 编码时，回退给 Chromium 直接解码原图，
              不能因为缩略图生成失败就让整个卡片变空白。 */
         }
         const imageFile = m[1] === 'full' ? (entry.image || entry.preview) : entry.preview;
-        if (!imageFile) return new Response('', { status: 404 });
+        if (!imageFile) return part(404);
         let r;
         try {
-          r = readRange(imageFile, request.headers.get('range'), fileType(path.extname(imageFile)));
+          r = readRange(imageFile, headerOf(request, 'range'), fileType(path.extname(imageFile)));
         } catch (e) {
-          return new Response('', { status: 404 });
+          return part(404);
         }
-        return new Response(r.body, {
-          status: r.status,
-          headers: Object.assign({ 'Cache-Control': 'public, max-age=86400' }, r.headers)
-        });
+        return part(r.status, Object.assign({ 'Cache-Control': 'public, max-age=86400' }, r.headers), r.body);
       }
 
       if (host === 'media') {
         const m = rel.match(/^video\/(.+)$/);
-        if (!m) return new Response('', { status: 404 });
+        if (!m) return part(404);
         const entry = state.byId.get(decodeURIComponent(m[1]));
-        if (!entry || !entry.video) return new Response('', { status: 404 });
-        const r = readRange(entry.video, request.headers.get('range'), fileType(path.extname(entry.video)));
-        return new Response(r.body, { status: r.status, headers: r.headers });
+        if (!entry || !entry.video) return part(404);
+        const r = readRange(entry.video, headerOf(request, 'range'), fileType(path.extname(entry.video)));
+        return part(r.status, r.headers, r.body);
       }
 
       if (host === 'scene') {
@@ -936,36 +944,33 @@ function installProtocol(el) {
         const m = rawRel.match(/^project\/([^/]+)\/(.+)$/);
         if (!m) {
           log('warn', 'scene request invalid url=' + request.url.slice(0, 1000));
-          return new Response('', { status: 404 });
+          return part(404);
         }
         let id;
-        try { id = decodeURIComponent(m[1]); } catch (e) { return new Response('', { status: 400 }); }
-        if (!id || /[\\/\0]/.test(id)) return new Response('', { status: 403 });
+        try { id = decodeURIComponent(m[1]); } catch (e) { return part(400); }
+        if (!id || /[\\/\0]/.test(id)) return part(403);
         const keyResource = m[2] === 'project.json' || m[2] === 'scene.pkg';
         const sampled = keyResource || sceneAssetLogCount < 12;
         if (!keyResource && sampled) sceneAssetLogCount++;
-        const range = String(request.headers.get('range') || '').slice(0, 80);
+        const range = String(headerOf(request, 'range') || '').slice(0, 80);
         if (sampled) {
           log('info', 'scene request id=' + id + ' rel=' + m[2].slice(0, 500) +
             ' method=' + request.method + ' range=' + (range || '-') + ' url=' + request.url.slice(0, 1000));
         }
         if (request.method === 'OPTIONS') {
           if (sampled) log('info', 'scene response id=' + id + ' rel=' + m[2].slice(0, 500) + ' status=204 preflight');
-          return new Response('', {
-            status: 204,
-            headers: {
-              'Access-Control-Allow-Origin': '*',
-              'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-              'Access-Control-Allow-Headers': 'Range, Content-Type',
-              'Access-Control-Max-Age': '3600',
-              'Cache-Control': 'no-store'
-            }
+          return part(204, {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+            'Access-Control-Allow-Headers': 'Range, Content-Type',
+            'Access-Control-Max-Age': '3600',
+            'Cache-Control': 'no-store'
           });
         }
         const resolved = resolveSceneAsset(state.byId.get(id), m[2]);
         if (resolved.status !== 200) {
           log('warn', 'scene resolve id=' + id + ' rel=' + m[2].slice(0, 500) + ' status=' + resolved.status);
-          return new Response('', { status: resolved.status, headers: { 'Access-Control-Allow-Origin': '*' } });
+          return part(resolved.status, { 'Access-Control-Allow-Origin': '*' });
         }
         const r = readRange(resolved.file, range, fileType(path.extname(resolved.file)));
         const headers = Object.assign({
@@ -979,7 +984,7 @@ function installProtocol(el) {
             ' status=' + r.status + ' length=' + String(r.headers['Content-Length'] || '-') +
             ' contentRange=' + String(r.headers['Content-Range'] || '-'));
         }
-        return new Response(r.body, { status: r.status, headers: headers });
+        return part(r.status, headers, r.body);
       }
 
       if (host === 'splash') {
@@ -987,34 +992,71 @@ function installProtocol(el) {
            不会被读取，所以改由插件自己的目录提供。 */
         const base = path.join(__dirname, 'splash');
         const file = path.resolve(base, rel);
-        if (file.indexOf(base) !== 0) return new Response('', { status: 403 });
+        if (file.indexOf(base) !== 0) return part(403);
         try {
           const st = fs.statSync(file);
-          if (!st.isFile()) return new Response('', { status: 404 });
+          if (!st.isFile()) return part(404);
         } catch (e) {
-          return new Response('', { status: 404 });
+          return part(404);
         }
-        const r = readRange(file, request.headers.get('range'), fileType(path.extname(file)));
+        const r = readRange(file, headerOf(request, 'range'), fileType(path.extname(file)));
         const headers = Object.assign({ 'Cache-Control': 'no-store' }, r.headers);
-        return new Response(r.body, { status: r.status, headers: headers });
+        return part(r.status, headers, r.body);
       }
 
       if (host === 'ui') {
         /* 裁剪预览小窗页面：走自定义协议，避免 data: 页面拿不到 mchose-wallpaper:// 资源 */
         if (rel === 'crop-preview') {
-          return new Response(cropHtml(), {
-            headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
-          });
+          return part(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }, Buffer.from(cropHtml(), 'utf8'));
         }
-        return new Response('', { status: 404 });
+        return part(404);
       }
 
-      return new Response('', { status: 404 });
+      return part(404);
     } catch (e) {
       log('warn', 'protocol error: ' + String(e && (e.stack || e.message) || e).slice(0, 2000));
-      return new Response('', { status: 500, headers: { 'Access-Control-Allow-Origin': '*' } });
+      return part(500, { 'Access-Control-Allow-Origin': '*' });
     }
-  });
+}
+
+/* Electron 25+ 用 protocol.handle（Response API）；旧版 Electron 只有 registerStreamProtocol，
+   需要把同一个路由结果转换成旧版回包格式。 */
+function installProtocol(el) {
+  if (!el || !el.protocol) return;
+  if (typeof el.protocol.handle === 'function') {
+    try { el.protocol.unhandle(SCHEME); } catch (e) { /* ignore */ }
+    el.protocol.handle(SCHEME, function (request) {
+      return Promise.resolve().then(function () { return serveScheme(request); }).then(function (res) {
+        const status = res.status || 200;
+        if (status === 204 || status === 205 || status === 304) {
+          return new Response(null, { status: status, headers: res.headers || {} });
+        }
+        let body = res.body;
+        if (body && typeof body.pipe === 'function') {
+          try { body = Readable.toWeb(body); } catch (e) { body = Buffer.alloc(0); }
+        }
+        return new Response(body == null ? '' : body, { status: status, headers: res.headers || {} });
+      });
+    });
+    return;
+  }
+  if (typeof el.protocol.registerStreamProtocol === 'function') {
+    try { el.protocol.unregisterProtocol(SCHEME); } catch (e) { /* ignore */ }
+    el.protocol.registerStreamProtocol(SCHEME, function (request, callback) {
+      Promise.resolve().then(function () { return serveScheme(request); }).then(function (res) {
+        let data = res.body;
+        if (data == null) data = Buffer.alloc(0);
+        else if (typeof data === 'string') data = Buffer.from(data, 'utf8');
+        callback({ statusCode: res.status || 200, headers: res.headers || {}, data: data });
+      }).catch(function (e) {
+        log('warn', 'protocol legacy error: ' + String(e && e.message || e).slice(0, 500));
+        callback({ statusCode: 500 });
+      });
+    });
+    log('info', 'protocol registered (legacy stream, electron=' + process.versions.electron + ')');
+    return;
+  }
+  log('warn', 'protocol API unavailable, electron=' + process.versions.electron);
 }
 
 // ---------- 状态与下行 ----------
@@ -1538,7 +1580,7 @@ function updateRotation(patch) {
 function updateBeautify(patch) {
   if (!patch || typeof patch !== 'object') return;
   const b = state.beautify;
-  const nums = { blur: [0, 60], brightness: [20, 180], dim: [0, 90], saturation: [0, 220], scale: [100, 160], speed: [0.3, 3], nativeBlur: [0, 50], nativeBrightness: [0, 100], posX: [0, 100], posY: [0, 100] };
+  const nums = { blur: [0, 60], brightness: [20, 180], dim: [0, 90], saturation: [0, 220], scale: [100, 160], speed: [0.3, 3], nativeBlur: [0, 50], nativeBrightness: [0, 100], deviceBlur: [0, 60], posX: [0, 100], posY: [0, 100] };
   for (const key of Object.keys(nums)) {
     if (patch[key] === undefined) continue;
     const n = Number(patch[key]);
@@ -1722,7 +1764,8 @@ const sceneRuntimeEpoch = new Map();
 function isTarget(wc) {
   try {
     if (!wc || (typeof wc.isDestroyed === 'function' && wc.isDestroyed())) return false;
-    return APP_URL_RE.test(wc.getURL() || '');
+    const url = wc.getURL() || '';
+    return APP_URL_RE.test(url);
   } catch (e) { return false; }
 }
 

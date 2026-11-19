@@ -20,6 +20,8 @@
     'wallpaper-hub'
   );
   const logFile = path.join(dataDir, 'bootstrap.log');
+  const lockFile = path.join(dataDir, 'stack.lock');
+  const LOCK_TTL = 60000;
 
   function log(kind, message) {
     try {
@@ -34,6 +36,54 @@
         new Date().toISOString() + ' [' + kind + '] ' + message + '\n'
       );
     } catch (_) {}
+  }
+
+  function readLock() {
+    try {
+      return JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function writeLock() {
+    try {
+      fs.mkdirSync(dataDir, { recursive: true });
+      fs.writeFileSync(
+        lockFile,
+        JSON.stringify({ pid: process.pid, exe: process.execPath, at: Date.now() })
+      );
+    } catch (_) {}
+  }
+
+  function alive(pid) {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return !!(error && error.code === 'EPERM');
+    }
+  }
+
+  /* 同一时间只允许一套插件组件运行，避免重复启动。 */
+  function acquire() {
+    const owner = readLock();
+    if (
+      owner && owner.pid && owner.pid !== process.pid && alive(owner.pid) &&
+      typeof owner.at === 'number' && Date.now() - owner.at < LOCK_TTL
+    ) {
+      return false;
+    }
+    writeLock();
+    const timer = setInterval(writeLock, 15000);
+    if (timer.unref) timer.unref();
+    process.on('exit', function () {
+      try {
+        const current = readLock();
+        if (current && current.pid === process.pid) fs.unlinkSync(lockFile);
+      } catch (_) {}
+    });
+    return true;
   }
 
   log(
@@ -56,19 +106,23 @@
   }
 
   /* 加载顺序：启动页保护/壁纸 → 完整桌宠 → 歌词 → sysdeck → 官方宿主。 */
-  const plugins = [
-    ['wallpaper', '../../wallpaper-hub/index.js'],
-    ['pet', '../../pet-hub/index.js'],
-    ['lyric', '../../lyric-bridge/index.js'],
-    ['sysdeck', '../../sysdeck/index.js']
-  ];
-  for (const item of plugins) {
-    try {
-      require(item[1]);
-      log(item[0] + '-ok', 'loaded');
-    } catch (error) {
-      log(item[0], error && error.stack || error);
+  if (acquire()) {
+    const plugins = [
+      ['wallpaper', '../../wallpaper-hub/index.js'],
+      ['pet', '../../pet-hub/index.js'],
+      ['lyric', '../../lyric-bridge/index.js'],
+      ['sysdeck', '../../sysdeck/index.js']
+    ];
+    for (const item of plugins) {
+      try {
+        require(item[1]);
+        log(item[0] + '-ok', 'loaded');
+      } catch (error) {
+        log(item[0], error && error.stack || error);
+      }
     }
+  } else {
+    log('stack', 'another host owns the wallpaper stack, skip plugins');
   }
 
   try {

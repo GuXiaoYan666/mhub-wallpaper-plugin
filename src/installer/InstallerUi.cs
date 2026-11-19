@@ -406,7 +406,7 @@ namespace MHubStartupPlugin
 
         internal MainForm()
         {
-            Text = "M HUB 增强安装器 · 4.0";
+            Text = "M HUB 增强安装器 · 4.1";
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
             ShowIcon = false;
@@ -414,14 +414,13 @@ namespace MHubStartupPlugin
             KeyPreview = true;
             BackColor = Color.FromArgb(238, 241, 245);
             Font = new Font("Microsoft YaHei UI", 9f);
-            AutoScaleDimensions = new SizeF(96f, 96f);
-            AutoScaleMode = AutoScaleMode.Dpi;
+            AutoScaleMode = AutoScaleMode.None;
             ClientSize = new Size(960, 676);
 
             BuildUi();
             WireEvents();
             SetStatus("准备就绪 · 官方文件将自动备份", UiPalette.Sky);
-            Log("M HUB 增强安装器 4.0 已就绪。");
+            Log("M HUB 增强安装器 4.1 已就绪。");
         }
 
         private Font F(float points, FontStyle style)
@@ -446,16 +445,16 @@ namespace MHubStartupPlugin
         {
             _closeButton = new IconCircle();
             _closeButton.Glyph = "close";
-            _closeButton.SetBounds(884, 24, 40, 40);
+            _closeButton.SetBounds(872, 24, 40, 40);
             _closeButton.Click += delegate { Close(); };
 
             _brand = new BrandTile();
             _brand.SetBounds(432, 74, 96, 96);
 
             _titleLabel = MkLabel("M HUB", 24f, UiPalette.Ink, FontStyle.Bold);
-            _titleLabel.SetBounds(280, 186, 400, 40);
+            _titleLabel.SetBounds(280, 184, 400, 46);
 
-            _versionLabel = MkLabel("版本 4.0", 10f, UiPalette.InkFaint, FontStyle.Regular);
+            _versionLabel = MkLabel("版本 4.1", 10f, UiPalette.InkFaint, FontStyle.Regular);
             _versionLabel.SetBounds(280, 228, 400, 22);
 
             LightSurface pathCard = new LightSurface();
@@ -479,9 +478,9 @@ namespace MHubStartupPlugin
             _freeLabel = MkLabel("所需空间 4.1 MB    可用空间 --", 8.5f, UiPalette.InkFaint, FontStyle.Regular);
             _freeLabel.SetBounds(240, 342, 480, 20);
 
-            _petChip = MakeChip("桌宠", 300);
-            _lyricChip = MakeChip("歌词桥", 400);
-            _sysdeckChip = MakeChip("桌面面板", 500);
+            _petChip = MakeChip("桌宠", 303, 100);
+            _lyricChip = MakeChip("歌词桥", 415, 110);
+            _sysdeckChip = MakeChip("桌面面板", 537, 120);
 
             _installButton = new PillButton();
             _installButton.DarkStyle = true;
@@ -538,12 +537,12 @@ namespace MHubStartupPlugin
             GiveDrag(pathCard);
         }
 
-        private ChipToggle MakeChip(string title, int x)
+        private ChipToggle MakeChip(string title, int x, int width)
         {
             ChipToggle chip = new ChipToggle();
             chip.Title = title;
             chip.Font = F(9f, FontStyle.Regular);
-            chip.SetBounds(x, 374, 100, 32);
+            chip.SetBounds(x, 374, width, 32);
             return chip;
         }
 
@@ -877,6 +876,65 @@ namespace MHubStartupPlugin
             if (e.Button != MouseButtons.Left) return;
             ReleaseCapture();
             SendMessage(Handle, 0x00A1, new IntPtr(2), IntPtr.Zero);
+        }
+
+        private float _appliedScale = 1f;
+        private float _appliedDpi = 96f;
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            ApplyScale(TargetScale());
+        }
+
+        protected override void OnDpiChanged(DpiChangedEventArgs e)
+        {
+            base.OnDpiChanged(e);
+            if (IsHandleCreated) ApplyScale(TargetScale());
+        }
+
+        private float TargetScale()
+        {
+            float scale = DeviceDpi / 96f;
+            string forced = Environment.GetEnvironmentVariable("MHUB_UI_SCALE");
+            float parsed;
+            if (!string.IsNullOrEmpty(forced) &&
+                float.TryParse(forced, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out parsed) && parsed > 0.4f && parsed < 4f)
+                scale = parsed;
+            Rectangle work = Screen.FromHandle(Handle).WorkingArea;
+            float fit = Math.Min(work.Width * 0.92f / 960f, work.Height * 0.92f / 676f);
+            return Math.Max(0.6f, Math.Min(scale, fit));
+        }
+
+        private void ApplyScale(float scale)
+        {
+            if (Math.Abs(scale - _appliedScale) < 0.001f) return;
+            float ratio = scale / _appliedScale;
+            float fontRatio = (scale / DeviceDpi) / (_appliedScale / _appliedDpi);
+            ClientSize = new Size((int)Math.Round(ClientSize.Width * ratio),
+                (int)Math.Round(ClientSize.Height * ratio));
+            ScaleTree(this, ratio, fontRatio);
+            _appliedScale = scale;
+            _appliedDpi = DeviceDpi;
+        }
+
+        private void ScaleTree(Control parent, float ratio, float fontRatio)
+        {
+            foreach (Control child in parent.Controls)
+            {
+                child.SetBounds((int)Math.Round(child.Left * ratio), (int)Math.Round(child.Top * ratio),
+                    (int)Math.Round(child.Width * ratio), (int)Math.Round(child.Height * ratio));
+                if (Math.Abs(fontRatio - 1f) > 0.001f)
+                    child.Font = new Font(child.Font.FontFamily,
+                        Math.Max(5f, child.Font.SizeInPoints * fontRatio), child.Font.Style, GraphicsUnit.Point);
+                if (child is LightSurface)
+                {
+                    LightSurface surface = (LightSurface)child;
+                    surface.Radius = (int)Math.Round(surface.Radius * ratio);
+                }
+                ScaleTree(child, ratio, fontRatio);
+            }
         }
 
         private void EnableWindowEffects()

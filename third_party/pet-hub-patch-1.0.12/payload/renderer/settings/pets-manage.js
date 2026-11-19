@@ -121,7 +121,8 @@
   const CHANNELS = {
     'codex-pet-installer': { verbs: ['add'], slug: SLUG_PATTERN },
     clipets: { verbs: ['install', 'i', 'add'], slug: /^[a-z0-9]+(?:-+[a-z0-9]+)*$/ },
-    petscodex: { verbs: ['install'], slug: /^[a-z0-9]+(?:-+[a-z0-9]+)*$/ }
+    petscodex: { verbs: ['install'], slug: /^[a-z0-9]+(?:-+[a-z0-9]+)*$/ },
+    petdex: { verbs: ['install', 'i', 'add'], slug: /^[a-z0-9]+(?:-+[a-z0-9]+)*$/ }
   };
   function parseNpxCommand(text) {
     const raw = String(text || '').trim();
@@ -146,7 +147,7 @@
     }
     while (rest[0] === '-y' || rest[0] === '--yes' || rest[0] === '--') rest.shift();
     const pkg = rest.shift() || '';
-    const match = /^(codex-pet-installer|clipets|petscodex)(?:@([A-Za-z0-9][A-Za-z0-9._-]*))?$/.exec(pkg);
+    const match = /^(codex-pet-installer|clipets|petscodex|petdex)(?:@([A-Za-z0-9][A-Za-z0-9._-]*))?$/.exec(pkg);
     const name = match && match[1];
     const channel = name && CHANNELS[name];
     if (!channel) {

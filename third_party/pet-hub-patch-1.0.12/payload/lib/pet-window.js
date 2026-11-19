@@ -499,6 +499,17 @@ function createPetWindow(ctx) {
     return win;
   }
 
+  // Windows 上透明无边框窗口 hide() 后再 show()，命中的鼠标输入状态与窗口层级可能丢失。
+  // 清掉缓存后重新断言置顶与点击穿透，并在下一个事件循环再补一次，
+  // 避免 showInactive 尚未完成时 setIgnoreMouseEvents / setAlwaysOnTop 被系统忽略。
+  function assertInputState() {
+    if (!isAlive()) return;
+    alwaysOnTopApplied = null;
+    clickThroughApplied = null;
+    applyAlwaysOnTop(settings().alwaysOnTop);
+    applyClickThrough(settings().clickThrough);
+  }
+
   function show() {
     if (settings().scale === 0) {
       hide();
@@ -508,6 +519,17 @@ function createPetWindow(ctx) {
     if (!target) return false;
     try {
       if (!target.isVisible()) target.showInactive();
+      assertInputState();
+      if (settings().alwaysOnTop !== false) {
+        try { target.moveTop(); } catch (e) { /* ignore */ }
+      }
+      setTimeout(function () {
+        if (!isAlive() || !win.isVisible()) return;
+        assertInputState();
+        if (settings().alwaysOnTop !== false) {
+          try { win.moveTop(); } catch (e) { /* ignore */ }
+        }
+      }, 90);
       return true;
     } catch (err) {
       log('warn', 'show failed', err);
@@ -518,6 +540,8 @@ function createPetWindow(ctx) {
   function hide() {
     if (!isAlive()) return false;
     try {
+      /* 隐藏时如果还处在拖拽状态，先把拖拽收口，避免再次显示后残留 dragging 标记。 */
+      if (dragging) endDrag(null, { persist: false });
       if (win.isVisible()) win.hide();
       return true;
     } catch (err) {

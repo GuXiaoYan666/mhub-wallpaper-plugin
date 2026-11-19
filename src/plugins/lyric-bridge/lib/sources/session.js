@@ -56,6 +56,10 @@ function createSessionSource(options) {
     lastMediaAt: 0,
     clock: { pos: 0, at: 0, valid: false },
     generation: 0,
+    lookupSeq: 0,
+    lookupPending: false,
+    attempts: 0,
+    retryAt: 0,
     polls: 0,
     hits: 0,
     lastError: null
@@ -70,37 +74,33 @@ function createSessionSource(options) {
     st.generation++;
     try { onTrack(null); } catch (e) { /* ignore */ }
   }
-  function beginTrack(media) {
-    const key = trackKey(media);
-    const generation = ++st.generation;
-    st.key = key;
-    st.pendingKey = null;
-    st.meta = {
-      key: key,
-      title: text(media.title, 160),
-      artist: text(media.artist, 120),
-      album: text(media.album, 120),
-      durationMs: Math.max(0, Number(media.durationMs) || 0),
-      id: text(media.id, 80)
-    };
-    st.track = null;
-    st.lastPos = positionOf(media);
-    st.lastPlaying = media.playing === true;
-    st.lastMediaAt = Date.now();
-    const startAt = st.pendingSince || Date.now();
-    st.clock = { pos: media.playing ? Math.max(0, Date.now() - startAt) : 0, at: Date.now(), valid: true };
-    logger.info('session: 新曲目 "' + st.meta.title + '" - ' + st.meta.artist);
-    try { onTrack(null); } catch (e) { /* ignore */ }
+  /* 在线歌词可能因为网络抖动或曲库暂时未索引而首次取不到。
+     以前只请求一次，取不到就永远停在这个曲目上；现在失败后按退避自动重试，
+     切换曲目时重新计数，避免「必须关掉歌词再打开」才能恢复。 */
+  function loadLyrics(generation) {
     const online = getOnline();
-    if (!online) return;
+    if (!online || !st.meta) return;
+    const seq = ++st.lookupSeq;
+    st.lookupPending = true;
     online.get(st.meta, function (result) {
-      if (generation !== st.generation) return;
+      if (generation !== st.generation || seq !== st.lookupSeq) return;
+      st.lookupPending = false;
       const lines = result && result.ok === false ? null : validLines(result && result.lines);
       if (!lines) {
         st.lastError = result && result.reason ? { code: String(result.reason).toUpperCase(), message: result.error || '' } : null;
+        st.attempts++;
+        if (st.attempts >= 6) {
+          st.retryAt = Infinity;
+        } else {
+          const delays = [4000, 8000, 15000, 30000, 60000];
+          st.retryAt = Date.now() + delays[Math.min(delays.length - 1, st.attempts - 1)];
+        }
+        logger.info('session: 歌词未就绪 "' + st.meta.title + '" (' + ((result && result.reason) || 'miss') + ')，第 ' + st.attempts + ' 次尝试');
         return;
       }
       st.hits++;
+      st.attempts = 0;
+      st.retryAt = 0;
       st.lastError = null;
       st.track = {
         key: st.meta.key,
@@ -118,6 +118,31 @@ function createSessionSource(options) {
       try { onTrack(st.track); } catch (e) { /* ignore */ }
       try { onAnchor({ posMs: st.lastPos, playing: st.lastPlaying, at: monoMs() }); } catch (e) { /* ignore */ }
     });
+  }
+  function beginTrack(media) {
+    const key = trackKey(media);
+    const generation = ++st.generation;
+    st.key = key;
+    st.pendingKey = null;
+    st.meta = {
+      key: key,
+      title: text(media.title, 160),
+      artist: text(media.artist, 120),
+      album: text(media.album, 120),
+      durationMs: Math.max(0, Number(media.durationMs) || 0),
+      id: text(media.id, 80)
+    };
+    st.track = null;
+    st.attempts = 0;
+    st.retryAt = 0;
+    st.lastPos = positionOf(media);
+    st.lastPlaying = media.playing === true;
+    st.lastMediaAt = Date.now();
+    const startAt = st.pendingSince || Date.now();
+    st.clock = { pos: media.playing ? Math.max(0, Date.now() - startAt) : 0, at: Date.now(), valid: true };
+    logger.info('session: 新曲目 "' + st.meta.title + '" - ' + st.meta.artist);
+    try { onTrack(null); } catch (e) { /* ignore */ }
+    loadLyrics(generation);
   }
   function poll() {
     st.polls++;
@@ -155,7 +180,10 @@ function createSessionSource(options) {
       return;
     }
     st.pendingKey = null;
-    if (!st.track) return;
+    if (!st.track) {
+      if (!st.lookupPending && st.meta && Date.now() >= st.retryAt) loadLyrics(st.generation);
+      return;
+    }
     const now = Date.now();
     const rawPos = Math.max(0, Number(media.positionMs) || 0);
     if (rawPos > 0) {
@@ -193,6 +221,14 @@ function createSessionSource(options) {
       st.running = false;
       if (st.timer) { clearInterval(st.timer); st.timer = null; }
       clearTrack('播放器停止');
+      return this;
+    },
+    /* 用户重新开启歌词显示时立即补一次：当前曲目已识别但歌词还没取到的话，不再等轮询。 */
+    retry: function () {
+      if (!st.meta || st.track) return this;
+      st.attempts = 0;
+      st.retryAt = 0;
+      if (!st.lookupPending) loadLyrics(st.generation);
       return this;
     },
     status: function () {

@@ -10,7 +10,7 @@
              },
     "payload":  {
                     "fileCount":  61,
-                    "bytes":  4056355
+                    "bytes":  4058593
                 },
     "files":  [
                   {
@@ -165,13 +165,13 @@
                   },
                   {
                       "path":  "payload/lib/pet-sources.js",
-                      "bytes":  3235,
-                      "sha256":  "59e93c4fafb245bd2c336965f35f0f97329d0b696358864b06fff6e11bb6d762"
+                      "bytes":  4242,
+                      "sha256":  "a42210486c8950887b00987a48f5adefe1137b194328eb48e71fb77af799e807"
                   },
                   {
                       "path":  "payload/lib/pet-window.js",
-                      "bytes":  28542,
-                      "sha256":  "0b14e8c7ff4c254565c2d9ff8ae4c47c6568b925c1c165e10b055f9bb94cec8a"
+                      "bytes":  29638,
+                      "sha256":  "595ea00048043634a3af546ef192b55749a67410ee5a430f0a9f269bddcc3a94"
                   },
                   {
                       "path":  "payload/lib/tray.js",
@@ -265,13 +265,13 @@
                   },
                   {
                       "path":  "payload/renderer/settings/i18n.js",
-                      "bytes":  32807,
-                      "sha256":  "328c8df00a40735d0ca67fea720405d41ff4a07c092d46e96b049038fda39cae"
+                      "bytes":  32841,
+                      "sha256":  "cba67c3c5661e712bb25656196a982f8e7c9710b59ae615f8a7b8eee9cef68bf"
                   },
                   {
                       "path":  "payload/renderer/settings/index.html",
-                      "bytes":  12048,
-                      "sha256":  "356a8264518e454a5386b55c4ebf40155570bdf30c9d87a5bd35859b2fcde3bc"
+                      "bytes":  12057,
+                      "sha256":  "af701bb32341e5040003abb12edec0e023018b4db44c40d8401b4d9c4dcc83a1"
                   },
                   {
                       "path":  "payload/renderer/settings/management.js",
@@ -290,8 +290,8 @@
                   },
                   {
                       "path":  "payload/renderer/settings/pets-manage.js",
-                      "bytes":  9728,
-                      "sha256":  "9b4b079aa88cafd5c82631677c0069fb479d79ce3b1ae876fe814e3b88c557a5"
+                      "bytes":  9820,
+                      "sha256":  "788d3445d437c6152dfcf558d22f5f010496fe104d260c34c1cb06f54f8500d7"
                   },
                   {
                       "path":  "payload/renderer/settings/settings.css",
@@ -335,8 +335,8 @@
                   },
                   {
                       "path":  "使用说明.txt",
-                      "bytes":  3638,
-                      "sha256":  "c385265a20f2ed047001f4555c9570ca861796c6c9ae460cfd3b5d16df49cf6c"
+                      "bytes":  3647,
+                      "sha256":  "e83ae422903bae46bd78e07ced2787f8cc5526b2a65fa305ddee449d1183a43b"
                   },
                   {
                       "path":  "卸载.cmd",

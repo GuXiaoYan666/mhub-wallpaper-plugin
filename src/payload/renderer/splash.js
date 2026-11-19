@@ -1030,7 +1030,9 @@
       root.classList.add('dsu-leaving')
       setTimeout(function () {
         resolve()
-        setTimeout(function () { try { window.close() } catch (e) {} }, 80)
+        setTimeout(function () {
+          try { window.close() } catch (e) {}
+        }, 80)
       }, fade + 30)
     })
     return leavePromise

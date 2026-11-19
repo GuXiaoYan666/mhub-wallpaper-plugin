@@ -18,7 +18,7 @@ Friend 插件补丁包 1.0.12  使用说明
   · 热键：Ctrl+Alt+P 显示 / 隐藏 Friend；Ctrl+Alt+O 打开 Friend 设置。
   · 桌面 Friend：单击挥手、双击跳跃；向左 / 右拖动时切换对应走路动作，松手恢复待机。
   · 列表提示「长按目标可删除」：长按后点击删除，仍需二次确认。
-  · 「添加伙伴」支持文件夹，以及 codex-pet-installer、clipets、petscodex 安装命令。
+  · 「添加伙伴」支持文件夹，以及 codex-pet-installer、clipets、petscodex、petdex 安装命令。
     下载时显示进度，可取消；素材完整校验后才加入列表。
   · 右侧「桌面」页底部提供「备份恢复」和「播报诊断」，版本与更新说明也在该面板内。
   · 删除的 Friend 进入回收站，可在「备份恢复」中找回素材、名字和成长。

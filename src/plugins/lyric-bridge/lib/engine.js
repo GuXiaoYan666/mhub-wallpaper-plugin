@@ -339,7 +339,29 @@ function createEngine(options) {
     setLyricEnabled: function (on) {
       const r = stateMod.saveConfig({ lyricEnabled: !!on });
       logger.info('lyric display -> ' + (on ? 'on' : 'off'));
-      if (!on) { st.line = null; st.active = null; if (st.scheduler) st.scheduler.setTrack(null); }
+      if (!on) {
+        st.line = null;
+        st.active = null;
+        if (st.scheduler) st.scheduler.setTrack(null);
+      } else {
+        /* 首次开启时把来源、当前曲目与时间轴重新对齐，等价于用户手动「关闭再打开」。
+           如果来源在插件启动时没有跑起来，或当前曲目歌词没取到，这里立即补齐。 */
+        startSources();
+        if (st.scheduler) st.scheduler.start();
+        if (st.session && typeof st.session.retry === 'function') {
+          try { st.session.retry(); } catch (e) { /* ignore */ }
+        }
+        const active = pickActive(monoMs());
+        st.active = active;
+        if (st.scheduler) {
+          if (active) {
+            st.scheduler.setAnchor({ posMs: anchorPos(st.slots[active], monoMs()), playing: st.slots[active].anchor.playing });
+            st.scheduler.setTrack(slotTrack(active));
+          } else {
+            st.scheduler.setTrack(null);
+          }
+        }
+      }
       try { onChange(); } catch (e) { /* ignore */ }
       writeStatus();
       return r;

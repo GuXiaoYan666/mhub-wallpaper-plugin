@@ -17,7 +17,7 @@
   var DEFAULT_BEAUTIFY = {
     blur: 0, brightness: 100, dim: 0, saturation: 100,
     scale: 100, fit: 'cover', posX: 50, posY: 50, motion: 'none', speed: 1,
-    nativeBlur: 0, nativeBrightness: 50
+    nativeBlur: 0, nativeBrightness: 50, deviceBlur: 12
   };
   var DEFAULT_SPLASH = {
     enabled: true,
@@ -203,7 +203,8 @@
   // ---------- 背景层 ----------
 
   function bgHost() {
-    return document.querySelector('.app-background') || document.querySelector('.wallpaper-background');
+    return document.querySelector('.app-background') ||
+      document.querySelector('.wallpaper-background');
   }
 
   function scenesEl() {
@@ -512,9 +513,16 @@
     applyBgStyles();
   }
 
+  /* 设备详情页的背景会更亮、文字更多，适当追加模糊让设置内容更清楚；
+     模糊度由控制面板的「设备页模糊」滑块决定，离开设备页自动还原。 */
+  function isDevicePage() {
+    try { return !!document.querySelector('.device-detail-layout'); } catch (e) { return false; }
+  }
+
   function effBlur() {
     var b = state.beautify;
-    return clamp((Number(b.blur) || 0) + (Number(b.nativeBlur) || 0), 0, 60);
+    var device = isDevicePage() ? (Number(b.deviceBlur) || 0) : 0;
+    return clamp((Number(b.blur) || 0) + (Number(b.nativeBlur) || 0) + device, 0, 80);
   }
 
   function effBrightness() {
@@ -735,10 +743,7 @@
         };
       }(meta));
       /* 滚轮经过滑块时只滚动页面，不改数值 */
-      meta.input.addEventListener('wheel', function (ev) {
-        ev.preventDefault();
-        scrollCardBy(ev.deltaY);
-      }, { passive: false });
+      meta.input.addEventListener('wheel', wheelScroll, { passive: false });
       control.appendChild(meta.input);
       nativeCtl.push(meta);
       paintNative(meta, v0);
@@ -858,10 +863,7 @@
       scheduleSave();
     };
     input.addEventListener('input', sync);
-    input.addEventListener('wheel', function (ev) {
-      ev.preventDefault();
-      scrollCardBy(ev.deltaY);
-    }, { passive: false });
+    input.addEventListener('wheel', wheelScroll, { passive: false });
     row.appendChild(head);
     row.appendChild(input);
     return { row: row, input: input, val: val };
@@ -1203,6 +1205,7 @@
       slider('水平位置', 'posX', 0, 100, 1, ' %'),
       slider('垂直位置', 'posY', 0, 100, 1, ' %'),
       slider('模糊', 'blur', 0, 60, 1, ' px'),
+      slider('设备页模糊', 'deviceBlur', 0, 60, 1, ' px'),
       slider('亮度', 'brightness', 20, 180, 1, ' %'),
       slider('暗化', 'dim', 0, 90, 1, ' %'),
       slider('饱和度', 'saturation', 0, 220, 1, ' %'),
@@ -1371,10 +1374,7 @@
       val.textContent = n + (unit || '');
       saveSplash();
     });
-    input.addEventListener('wheel', function (ev) {
-      ev.preventDefault();
-      scrollCardBy(ev.deltaY);
-    }, { passive: false });
+    input.addEventListener('wheel', wheelScroll, { passive: false });
     row.appendChild(head);
     row.appendChild(input);
     return { row: row, input: input, val: val };
@@ -1754,10 +1754,27 @@
     }
   }
 
-  function scrollCardBy(dy) {
-    var card = document.querySelector('.theme-setting-panel--wallpaper');
-    var wrap = card && card.shadowRoot && card.shadowRoot.querySelector('.du-card');
-    if (wrap) wrap.scrollTop += dy;
+  /* 滚轮经过滑块时只滚动页面：沿事件路径找到真正的滚动容器再接管。
+     找不到就让浏览器默认处理，避免像以前那样无条件 preventDefault 后
+     官方页面（尤其是自定义导入壁纸的主题设置）反而「划不动」。 */
+  function wheelTarget(ev) {
+    var path = ev.composedPath ? ev.composedPath() : [];
+    for (var i = 0; i < path.length; i++) {
+      var node = path[i];
+      if (!node || node.nodeType !== 1) continue;
+      var cs;
+      try { cs = getComputedStyle(node); } catch (e) { continue; }
+      var oy = cs.overflowY;
+      if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && node.scrollHeight - node.clientHeight > 2) return node;
+    }
+    return null;
+  }
+
+  function wheelScroll(ev) {
+    var target = wheelTarget(ev);
+    if (!target) return;
+    ev.preventDefault();
+    target.scrollTop += ev.deltaY;
   }
 
   function ensureCardScroll() {

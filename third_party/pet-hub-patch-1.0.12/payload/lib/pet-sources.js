@@ -60,6 +60,23 @@ async function resolveSource(parsed, fetchBytes) {
       }
     };
   }
+  if (parsed.provider === 'petdex') {
+    // petdex 官方清单：每条给出 petJsonUrl / spritesheetUrl 直链（assets.petdex.dev）。
+    // 注意宠物包内的 manifest 文件名是 petjson.json，且 meta.spritesheetPath 与真实图集文件名
+    // 不一定一致，所以图集必须以清单里的 spritesheetUrl 为准。
+    const catalog = json(await fetchBytes('https://petdex.dev/api/manifest', 32 * 1024 * 1024));
+    if (!Array.isArray(catalog.pets)) invalid();
+    const pet = catalog.pets.find(p => p && p.slug === parsed.slug);
+    if (!pet) invalid('pet-not-found');
+    const manifestUrl = assetUrl(pet.petJsonUrl);
+    const sheetUrl = assetUrl(pet.spritesheetUrl);
+    const base = manifestUrl.slice(0, manifestUrl.lastIndexOf('/') + 1);
+    return {
+      fallbackId: pet.slug, manifestUrl,
+      sheet: () => ({ url: sheetUrl, extension: extension(new URL(sheetUrl).pathname) }),
+      asset: name => ({ url: base + relative(name), extension: extension(name) })
+    };
+  }
   invalid('unknown-package');
 }
 module.exports = { resolveSource };

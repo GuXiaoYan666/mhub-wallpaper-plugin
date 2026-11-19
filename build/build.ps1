@@ -30,7 +30,7 @@ if ($webWallGlActualHash -ne $webWallGlExpectedHash) {
 if (-not (Test-Path $petManifestPath -PathType Leaf)) {
     throw "Pinned pet-hub manifest is missing: $petManifestPath"
 }
-$petManifest = Get-Content -Raw -LiteralPath $petManifestPath | ConvertFrom-Json
+$petManifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $petManifestPath | ConvertFrom-Json
 if ($petManifest.name -ne 'pet-hub' -or $petManifest.version -ne '1.0.12') {
     throw "Unexpected pet package: $($petManifest.name) $($petManifest.version)"
 }
