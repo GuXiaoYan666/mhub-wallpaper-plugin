@@ -144,6 +144,8 @@ const state = {
      true：连官方前景层一起遮盖，只显示壁纸（旧行为，需用户在面板手动开启）。 */
   overlayOfficial: false,
   beautify: Object.assign({}, DEFAULT_BEAUTIFY),
+  /* 场景壁纸自定义属性值：{ [wallpaperId]: { [propertyKey]: value } } */
+  props: Object.create(null),
   splash: Object.assign({}, DEFAULT_SPLASH),
   hotkeys: Object.assign({}, DEFAULT_HOTKEYS),
   hotkeyErrors: [],
@@ -160,6 +162,12 @@ const state = {
   if (saved.beautify && typeof saved.beautify === 'object') {
     for (const key of Object.keys(DEFAULT_BEAUTIFY)) {
       if (saved.beautify[key] !== undefined) state.beautify[key] = saved.beautify[key];
+    }
+  }
+  if (saved.props && typeof saved.props === 'object' && !Array.isArray(saved.props)) {
+    for (const key of Object.keys(saved.props)) {
+      const value = saved.props[key];
+      if (value && typeof value === 'object' && !Array.isArray(value)) state.props[key] = Object.assign({}, value);
     }
   }
   if (saved.splash && typeof saved.splash === 'object') {
@@ -233,6 +241,7 @@ function saveState() {
       enabled: state.enabled,
       overlayOfficial: state.overlayOfficial,
       beautify: state.beautify,
+      props: state.props,
       splash: state.splash,
       hotkeys: state.hotkeys,
       manualLibraries: state.manualLibraries,
@@ -501,6 +510,29 @@ function generatedProjectId(library, root, dir) {
   return (library.source === 'manual' ? 'm:' : 'g:') + shortHash(library.id + '|' + rel.toLowerCase());
 }
 
+/* 读取 Wallpaper Engine 项目里 project.json → general.properties 的自定义属性，
+   供面板生成与壁纸引擎一致的调节项。 */
+function projectProperties(meta) {
+  const src = meta && meta.general && meta.general.properties;
+  if (!src || typeof src !== 'object') return [];
+  const out = [];
+  for (const key of Object.keys(src)) {
+    const p = src[key];
+    if (!p || typeof p !== 'object') continue;
+    const type = String(p.type || '').toLowerCase();
+    if (!type || type === 'group') continue;
+    const prop = { key: key, label: String(p.text || key).slice(0, 60), type: type, value: p.value };
+    if (p.min !== undefined) prop.min = p.min;
+    if (p.max !== undefined) prop.max = p.max;
+    if (p.step !== undefined) prop.step = p.step;
+    if (Array.isArray(p.options)) prop.options = p.options.map(function (o) { return String(o); });
+    if (p.order !== undefined) prop.order = Number(p.order) || 0;
+    out.push(prop);
+  }
+  out.sort(function (a, b) { return (a.order || 0) - (b.order || 0); });
+  return out;
+}
+
 function addProject(ctx, dir, id, library) {
   const projectJson = path.join(dir, 'project.json');
   const canonical = canonicalPath(dir);
@@ -533,6 +565,7 @@ function addProject(ctx, dir, id, library) {
   if (declaredFile && IMAGE_EXT.indexOf(path.extname(declaredFile).toLowerCase()) >= 0) imageFile = declaredFile;
   if (!imageFile) imageFile = preview;
   const kind = (scenePkg || sceneEntry) ? 'scene' : (webEntry ? 'web' : (videoFile ? 'video' : 'image'));
+  const props = (kind === 'scene' || kind === 'web') ? projectProperties(meta) : [];
   if (!preview && !videoFile && !imageFile && !scenePkg && !sceneEntry && !webEntry) return;
 
   if (ctx.byId.has(id)) id += ':' + shortHash(canonical).slice(0, 8);
@@ -549,6 +582,7 @@ function addProject(ctx, dir, id, library) {
     libraryId: library.id,
     adult: /questionable|mature/i.test(String(meta.contentrating || ''))
   };
+  if (props.length) item.props = props;
   ctx.byId.set(id, {
     dir: canonical,
     projectJson: projectJson,
@@ -559,6 +593,7 @@ function addProject(ctx, dir, id, library) {
     sceneEntry: sceneEntry,
     webEntry: webEntry,
     kind: kind,
+    props: props,
     source: library.source,
     libraryId: library.id
   });
@@ -1076,6 +1111,7 @@ function snapshot() {
     rotation: state.rotation,
     scenePerformance: state.scenePerformance,
     beautify: state.beautify,
+    props: state.props,
     splash: state.splash,
     hotkeys: state.hotkeys,
     hotkeyErrors: state.hotkeyErrors,
@@ -1120,6 +1156,18 @@ function pushState(target) {
   }
 }
 
+function resolveProps(id) {
+  const entry = state.byId.get(id);
+  const list = entry && entry.props;
+  if (!list || !list.length) return null;
+  const saved = state.props[id] || {};
+  const out = {};
+  for (const p of list) {
+    out[p.key] = saved[p.key] !== undefined ? saved[p.key] : p.value;
+  }
+  return out;
+}
+
 function backgroundMedia() {
   const entry = state.byId.get(state.bgId);
   if (!entry) return null;
@@ -1130,7 +1178,8 @@ function backgroundMedia() {
     image: entry.preview || entry.image ? SCHEME + '://img/full/' + encodeURIComponent(state.bgId) : '',
     video: kind === 'video' && entry.video ? (SCHEME + '://media/video/' + encodeURIComponent(state.bgId)) : '',
     sceneBase: kind === 'scene' || kind === 'web' ? SCHEME + '://scene/project/' + encodeURIComponent(state.bgId) + '/' : '',
-    performance: state.scenePerformance
+    performance: state.scenePerformance,
+    props: resolveProps(state.bgId)
   };
 }
 
@@ -1516,6 +1565,27 @@ function resetBackground() {
   pushBackground();
   pushState();
   for (const wc of startupTargets()) injectStartup(wc, true);
+}
+
+function updateProps(payload) {
+  const id = String(payload && payload.id || '');
+  const entry = state.byId.get(id);
+  const values = payload && payload.values;
+  if (!entry || !entry.props || !entry.props.length || !values || typeof values !== 'object') return;
+  const next = Object.assign({}, state.props[id] || {});
+  let changed = false;
+  for (const p of entry.props) {
+    if (values[p.key] === undefined) continue;
+    const v = values[p.key];
+    const t = typeof v;
+    if (t !== 'number' && t !== 'string' && t !== 'boolean') continue;
+    next[p.key] = v;
+    changed = true;
+  }
+  if (!changed) return;
+  state.props[id] = next;
+  saveState();
+  pushBackground();
 }
 
 function updateFavorite(payload) {
@@ -1944,6 +2014,7 @@ function handleUplink(raw, wc) {  let msg;
     return;
   }
   if (t === 'beautify') { updateBeautify(msg.payload); return; }
+  if (t === 'props') { updateProps(msg.payload); return; }
   if (t === 'overlayOfficial') {
     const value = msg.payload || {};
     state.overlayOfficial = !!value.enabled;

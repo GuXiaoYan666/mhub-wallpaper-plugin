@@ -10,7 +10,7 @@
              },
     "payload":  {
                     "fileCount":  61,
-                    "bytes":  4058593
+                    "bytes":  4059089
                 },
     "files":  [
                   {
@@ -170,8 +170,8 @@
                   },
                   {
                       "path":  "payload/lib/pet-window.js",
-                      "bytes":  29638,
-                      "sha256":  "595ea00048043634a3af546ef192b55749a67410ee5a430f0a9f269bddcc3a94"
+                      "bytes":  29966,
+                      "sha256":  "b8e3c5f6dcc187768fb937be98f6ad63d1ad5092ae5a866816d25233aa1344f4"
                   },
                   {
                       "path":  "payload/lib/tray.js",
@@ -215,8 +215,8 @@
                   },
                   {
                       "path":  "payload/renderer/pet/pet.js",
-                      "bytes":  84660,
-                      "sha256":  "0405c26e39f4d8e1f7226eacaa81d3655a441669613cd140185f4e7b056305de"
+                      "bytes":  84828,
+                      "sha256":  "ed831cb6565c9c6754116ff300fd6d3cf788d63095a9675110b96f19760d7fa8"
                   },
                   {
                       "path":  "payload/renderer/pet/pet-behavior.js",

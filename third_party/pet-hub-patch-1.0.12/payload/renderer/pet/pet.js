@@ -2194,8 +2194,12 @@ const ROAM_FALLBACK_MS = 4000;
   document.addEventListener('visibilitychange', function () {
     lastTs = 0;
     if (document.hidden) {
+      pointer = null;
       bubbles.clear();
       if (bubble) bubble.clear();
+    } else {
+      /* 再次显示后主动要一次最新状态，让主进程重新断言置顶与鼠标穿透。 */
+      send(IPC.READY);
     }
   });
   motion.addEventListener('change', function () {

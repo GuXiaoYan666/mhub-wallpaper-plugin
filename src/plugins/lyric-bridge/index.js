@@ -105,7 +105,10 @@ function createContext() {
   }
   function snapshot() {
     const config = getConfig();
-    const lyric = env.engine ? env.engine.getLyric() : { on: false, text: '', source: null, title: '', artist: '', album: '', posMs: 0, durationMs: 0, playing: false };
+    const lyric = env.engine ? env.engine.getLyric() : {
+      on: config.pluginEnabled !== false && config.lyricEnabled !== false,
+      text: '', source: null, title: '', artist: '', album: '', posMs: 0, durationMs: 0, playing: false
+    };
     const nowPlaying = env.mediaSession ? env.mediaSession.snapshot() : {ready:false,media:null,error:null};
     nowPlaying.media = currentMedia(config);
     if (nowPlaying.media && lyric && lyric.on && lyric.artwork && !nowPlaying.media.artwork &&

@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const https = require('https');
+const http = require('./http.js');
 const P = require('./paths.js');
 const stateMod = require('./state.js');
 const { parseLyric } = require('./sources/soda.js');
@@ -47,41 +47,7 @@ function cacheKey(track) {
 }
 function cacheFile(key) { return path.join(CACHE_DIR, key + '.json'); }
 function requestJson(url, timeoutMs) {
-  return new Promise(function (resolve, reject) {
-    let settled = false;
-    function done(err, value) {
-      if (settled) return;
-      settled = true;
-      if (err) reject(err); else resolve(value);
-    }
-    let req;
-    try {
-      req = https.get(url, {
-        headers: { 'User-Agent': USER_AGENT, 'Accept': 'application/json' }
-      }, function (res) {
-        if (res.statusCode === 404) { res.resume(); done(null, null); return; }
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          res.resume();
-          done(new Error('HTTP ' + res.statusCode));
-          return;
-        }
-        const chunks = [];
-        let size = 0;
-        res.on('data', function (chunk) {
-          size += chunk.length;
-          if (size > MAX_BODY) { req.destroy(new Error('response too large')); return; }
-          chunks.push(chunk);
-        });
-        res.on('end', function () {
-          try { done(null, JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
-          catch (e) { done(e); }
-        });
-        res.on('error', function (e) { done(e); });
-      });
-    } catch (e) { done(e); return; }
-    req.setTimeout(timeoutMs, function () { req.destroy(new Error('timeout')); });
-    req.on('error', function (e) { done(e); });
-  });
+  return http.requestJson(url, timeoutMs, { 'User-Agent': USER_AGENT, 'Accept': 'application/json' });
 }
 function normalizeText(track) {
   const title = clean(track && track.title, 160);

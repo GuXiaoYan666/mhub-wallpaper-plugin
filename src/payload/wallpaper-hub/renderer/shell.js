@@ -69,6 +69,7 @@
     enabled: false,
     overlayOfficial: false,
     beautify: Object.assign({}, DEFAULT_BEAUTIFY),
+    props: {},
     splash: Object.assign({}, DEFAULT_SPLASH),
     hotkeys: Object.assign({}, DEFAULT_HOTKEYS),
     hotkeyErrors: [],
@@ -1138,6 +1139,158 @@
     return { row: sec, interval: interval, scope: scope, performance: performance, rotation: rotation, pauseHidden: pauseHidden, overlayOfficial: overlayOfficial, sceneStatus: sceneStatus };
   }
 
+  /* ---------- 场景属性（Wallpaper Engine project.json → general.properties） ---------- */
+  var propsSig = '';
+
+  function propState(item) { return (state.props && state.props[item.id]) || {}; }
+
+  function propSaved(item, prop) {
+    var saved = propState(item);
+    return saved[prop.key] !== undefined ? saved[prop.key] : prop.value;
+  }
+
+  function colorToHex(value) {
+    var parts = Array.isArray(value) ? value : String(value == null ? '' : value).replace(/,/g, ' ').trim().split(/\s+/);
+    if (!parts || parts.length < 3) return '#ffffff';
+    var nums = parts.slice(0, 3).map(Number);
+    if (nums.some(function (n) { return !isFinite(n); })) return '#ffffff';
+    if (nums.some(function (n) { return n > 1; })) nums = nums.map(function (n) { return n / 255; });
+    var hex = '#';
+    for (var i = 0; i < 3; i++) {
+      var v = Math.round(clamp(nums[i], 0, 1) * 255).toString(16);
+      hex += v.length < 2 ? '0' + v : v;
+    }
+    return hex;
+  }
+
+  function hexToColor(hex) {
+    var m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+    if (!m) return '1 1 1';
+    var n = parseInt(m[1], 16);
+    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]
+      .map(function (v) { return String(Math.round(v * 1000) / 1000); }).join(' ');
+  }
+
+  function sendProp(item, key, value) {
+    if (!item || !state.props) return;
+    var next = Object.assign({}, propState(item));
+    next[key] = value;
+    state.props[item.id] = next;
+    uplink({ t: 'props', payload: { id: item.id, values: next } });
+  }
+
+  function buildPropRow(item, prop, store) {
+    var row = el('div', '');
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;min-height:30px;';
+    var label = el('span', '', prop.label || prop.key);
+    label.style.cssText = 'flex:1;font-size:12px;opacity:.72;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+    row.appendChild(label);
+    var kind = prop.type;
+    var value = propSaved(item, prop);
+    if (kind === 'slider') {
+      var min = Number.isFinite(Number(prop.min)) ? Number(prop.min) : 0;
+      var max = Number.isFinite(Number(prop.max)) ? Number(prop.max) : 1;
+      var step = Number(prop.step) > 0 ? Number(prop.step) : (max - min) / 100;
+      var range = document.createElement('input');
+      range.type = 'range';
+      range.min = String(min); range.max = String(max); range.step = String(step);
+      range.value = String(Number(value) || min);
+      range.style.cssText = 'width:140px;accent-color:#4c8dff;';
+      var val = el('span', '', range.value);
+      val.style.cssText = 'width:48px;text-align:right;font-size:11px;opacity:.6;font-variant-numeric:tabular-nums;';
+      range.addEventListener('input', function () {
+        var v = Number(range.value);
+        val.textContent = String(v);
+        sendProp(item, prop.key, v);
+      });
+      row.appendChild(range);
+      row.appendChild(val);
+      store[prop.key] = { kind: 'slider', input: range, val: val };
+    } else if (kind === 'color') {
+      var color = document.createElement('input');
+      color.type = 'color';
+      color.value = colorToHex(value);
+      color.style.cssText = 'width:44px;height:22px;padding:0;border:none;background:transparent;cursor:pointer;';
+      color.addEventListener('input', function () { sendProp(item, prop.key, hexToColor(color.value)); });
+      row.appendChild(color);
+      store[prop.key] = { kind: 'color', input: color };
+    } else if (kind === 'bool') {
+      var check = document.createElement('input');
+      check.type = 'checkbox';
+      check.checked = !!value;
+      check.style.cssText = 'width:16px;height:16px;accent-color:#4c8dff;cursor:pointer;';
+      check.addEventListener('change', function () { sendProp(item, prop.key, !!check.checked); });
+      row.appendChild(check);
+      store[prop.key] = { kind: 'bool', input: check };
+    } else if (kind === 'combo' && Array.isArray(prop.options) && prop.options.length) {
+      var sel = document.createElement('select');
+      sel.style.cssText = 'max-width:180px;height:24px;border-radius:6px;font-size:11px;background:rgba(255,255,255,.06);color:inherit;border:1px solid rgba(255,255,255,.12);';
+      prop.options.forEach(function (text, index) {
+        var opt = document.createElement('option');
+        opt.value = String(index);
+        opt.textContent = text;
+        sel.appendChild(opt);
+      });
+      sel.value = String(Number(value) || 0);
+      sel.addEventListener('change', function () { sendProp(item, prop.key, Number(sel.value) || 0); });
+      row.appendChild(sel);
+      store[prop.key] = { kind: 'combo', input: sel };
+    } else if (kind === 'text') {
+      row.appendChild(el('span', '', String(value == null ? '' : value)));
+    } else {
+      var text = document.createElement('input');
+      text.type = 'text';
+      text.value = String(value == null ? '' : value);
+      text.style.cssText = 'width:150px;height:24px;padding:0 8px;border-radius:6px;font-size:11px;background:rgba(255,255,255,.06);color:inherit;border:1px solid rgba(255,255,255,.12);';
+      text.addEventListener('change', function () { sendProp(item, prop.key, text.value); });
+      row.appendChild(text);
+      store[prop.key] = { kind: 'text', input: text };
+    }
+    return row;
+  }
+
+  function renderPropsSection(item) {
+    if (!panel || !panel.__refs || !panel.__refs.propsBox) return;
+    var box = panel.__refs.propsBox;
+    var list = item && Array.isArray(item.props) && (item.kind === 'scene' || item.kind === 'web') ? item.props : null;
+    if (!list || !list.length) {
+      box.style.display = 'none';
+      propsSig = '';
+      box.innerHTML = '';
+      return;
+    }
+    box.style.display = '';
+    var sig = item.id + '|' + list.map(function (p) { return p.key + ':' + p.type; }).join(',');
+    if (sig !== propsSig) {
+      propsSig = sig;
+      box.innerHTML = '';
+      var head = el('div', '', '场景属性 · ' + (item.title || ''));
+      head.style.cssText = 'font-size:12px;font-weight:600;letter-spacing:.5px;opacity:.85;margin-bottom:8px;';
+      box.appendChild(head);
+      box.__inputs = {};
+      for (var i = 0; i < list.length; i++) box.appendChild(buildPropRow(item, list[i], box.__inputs));
+    }
+    var inputs = box.__inputs || {};
+    for (var j = 0; j < list.length; j++) {
+      var prop = list[j];
+      var meta = inputs[prop.key];
+      if (!meta) continue;
+      var value = propSaved(item, prop);
+      if (meta.kind === 'slider') {
+        if (document.activeElement !== meta.input) meta.input.value = String(Number(value) || Number(prop.min) || 0);
+        meta.val.textContent = String(meta.input.value);
+      } else if (meta.kind === 'color') {
+        if (document.activeElement !== meta.input) meta.input.value = colorToHex(value);
+      } else if (meta.kind === 'bool') {
+        meta.input.checked = !!value;
+      } else if (meta.kind === 'combo') {
+        if (document.activeElement !== meta.input) meta.input.value = String(Number(value) || 0);
+      } else if (meta.kind === 'text') {
+        if (document.activeElement !== meta.input) meta.input.value = String(value == null ? '' : value);
+      }
+    }
+  }
+
   function renderPlayback() {
     if (!panel || !panel.__refs || !panel.__refs.playback) return;
     var refs = panel.__refs.playback;
@@ -1219,6 +1372,13 @@
     for (var i = 0; i < controls.length; i++) ctl.appendChild(controls[i].row);
     for (var j = 0; j < sels.length; j++) ctl.appendChild(sels[j].row);
     sec.appendChild(ctl);
+
+    /* 场景壁纸自定义属性（对应 Wallpaper Engine 项目里的常规属性） */
+    var propsBox = el('div', 'mhub-wp-props');
+    propsBox.id = 'mhub-wp-props';
+    propsBox.style.cssText = 'display:none;margin:2px 0 12px;padding:10px 12px;border-radius:10px;' +
+      'background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);';
+    sec.appendChild(propsBox);
 
     /* ---- 自定义快捷键 ---- */
     var hkSec = el('div', 'mhub-wp-keys');
@@ -1336,7 +1496,7 @@
     panel.__refs = {
       status: status, search: search, chips: chips, count: count,
       grid: grid, switchInput: switchInput, controls: controls, sels: sels, hotkeys: hkRefs,
-      library: library, playback: playback
+      library: library, playback: playback, propsBox: propsBox
     };
     panelSig = '';
     return sec;
@@ -1953,6 +2113,7 @@
     renderHotkeyRows(refs.hotkeys);
     renderLibraries();
     renderPlayback();
+    renderPropsSection(cur);
     refs.library.filter.value = panel.__libraryFilter || 'all';
 
     for (var c = 0; c < refs.controls.length; c++) {
@@ -2184,6 +2345,7 @@
         if (data.beautify[k] !== undefined) state.beautify[k] = data.beautify[k];
       }
     }
+    if (data.props && typeof data.props === 'object') state.props = data.props;
     if (data.splash && typeof data.splash === 'object' && Date.now() - lastSplashEditAt > 900) {
       for (var sk in DEFAULT_SPLASH) {
         if (data.splash[sk] !== undefined) state.splash[sk] = data.splash[sk];
@@ -2214,6 +2376,7 @@
     } else if (sceneSession && info) {
       sceneSession.setPerformance(info.performance);
       sceneSession.setFit(currentCrop().fit);
+      if (info.props) sceneSession.setProperties(info.props);
       syncSceneVisibility();
     }
     ensureBgState();

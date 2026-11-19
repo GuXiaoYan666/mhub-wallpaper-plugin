@@ -1,5 +1,5 @@
 'use strict';
-const https = require('https');
+const http = require('../http.js');
 const BASE = 'https://music.163.com';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 const HEADERS = {
@@ -11,39 +11,7 @@ const HEADERS = {
 const MAX_BODY = 2 * 1024 * 1024;
 const META_PREFIX = /^(作词|作曲|编曲|制作人|演唱|歌手|原唱|翻唱|和声|吉他|贝斯|鼓|键盘|钢琴|弦乐|录音|混音|母带|监制|出品|企划|统筹|发行|录音棚|混音室|封面|插画|OP|SP)\s*[:：]/;
 function requestJson(url, timeoutMs) {
-  return new Promise(function (resolve, reject) {
-    let settled = false;
-    function done(err, value) {
-      if (settled) return;
-      settled = true;
-      if (err) reject(err); else resolve(value);
-    }
-    let req;
-    try {
-      req = https.get(url, { headers: HEADERS }, function (res) {
-        if (res.statusCode === 404) { res.resume(); done(null, null); return; }
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          res.resume();
-          done(new Error('HTTP ' + res.statusCode));
-          return;
-        }
-        const chunks = [];
-        let size = 0;
-        res.on('data', function (chunk) {
-          size += chunk.length;
-          if (size > MAX_BODY) { req.destroy(new Error('response too large')); return; }
-          chunks.push(chunk);
-        });
-        res.on('end', function () {
-          try { done(null, JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
-          catch (e) { done(e); }
-        });
-        res.on('error', function (e) { done(e); });
-      });
-    } catch (e) { done(e); return; }
-    req.setTimeout(timeoutMs, function () { req.destroy(new Error('timeout')); });
-    req.on('error', function (e) { done(e); });
-  });
+  return http.requestJson(url, timeoutMs, HEADERS);
 }
 function clean(value, max) {
   return String(value == null ? '' : value)

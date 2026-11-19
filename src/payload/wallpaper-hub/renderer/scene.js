@@ -175,6 +175,7 @@
         fit: session.fit,
         volume: 0,
         autoplay: !session.paused,
+        properties: media.props && typeof media.props === 'object' ? media.props : {},
         onReady: ready,
         onError: fail,
         onDiagnostic: function (message, level) {
@@ -245,6 +246,13 @@
       try { instance.setRenderDpr(session.performance.renderDpr); } catch (e) { /* ignore */ }
       try { instance.setVideoTexScale(session.performance.videoTexScale); } catch (e) { /* ignore */ }
       try { instance.setQuality(session.performance.quality); } catch (e) { /* ignore */ }
+    };
+
+    session.setProperties = function (props) {
+      if (!alive() || !props || typeof props !== 'object') return;
+      session.properties = Object.assign({}, session.properties, props);
+      if (!session.instance) return;
+      try { session.instance.setProperties(props); } catch (e) { /* ignore */ }
     };
 
     session.setPaused = function (paused) {

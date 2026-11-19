@@ -523,13 +523,18 @@ function createPetWindow(ctx) {
       if (settings().alwaysOnTop !== false) {
         try { target.moveTop(); } catch (e) { /* ignore */ }
       }
-      setTimeout(function () {
-        if (!isAlive() || !win.isVisible()) return;
-        assertInputState();
-        if (settings().alwaysOnTop !== false) {
-          try { win.moveTop(); } catch (e) { /* ignore */ }
-        }
-      }, 90);
+      /* showInactive 完成前设置输入状态可能被系统忽略；分多次补断言，
+         并顺带修复「窗口已在但 isVisible 仍为 false」的偶发状态。 */
+      [120, 360, 900].forEach(function (delay) {
+        setTimeout(function () {
+          if (!isAlive()) return;
+          try { if (!win.isVisible()) win.showInactive(); } catch (e) { /* ignore */ }
+          assertInputState();
+          if (settings().alwaysOnTop !== false) {
+            try { win.moveTop(); } catch (e) { /* ignore */ }
+          }
+        }, delay);
+      });
       return true;
     } catch (err) {
       log('warn', 'show failed', err);

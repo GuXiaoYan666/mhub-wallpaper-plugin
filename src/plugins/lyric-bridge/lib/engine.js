@@ -337,7 +337,11 @@ function createEngine(options) {
         at: Date.now() };
     },
     setLyricEnabled: function (on) {
-      const r = stateMod.saveConfig({ lyricEnabled: !!on });
+      /* 打开歌词显示时顺带把插件启用置回 true：
+         部分用户的历史配置里 pluginEnabled=false，会导致开关看似永远打不开。 */
+      const patch = { lyricEnabled: !!on };
+      if (on) patch.pluginEnabled = true;
+      const r = stateMod.saveConfig(patch);
       logger.info('lyric display -> ' + (on ? 'on' : 'off'));
       if (!on) {
         st.line = null;
