@@ -2310,6 +2310,8 @@ function attach(wc) {
     try {
       wc.on('dom-ready', function () {
         if (isStartup(wc)) {
+          /* 页面就绪时 URL 已经确定，这里立即装拦截/置顶，别等 1.2s 轮询。 */
+          try { installSplashGuard(wc); } catch (e) { /* ignore */ }
           mountSplash(wc);
           setTimeout(function () { injectStartup(wc, true); }, 220);
           if (!previewWin || previewWin.isDestroyed() || previewWin.webContents !== wc) autoMaximizeStartup(wc);
