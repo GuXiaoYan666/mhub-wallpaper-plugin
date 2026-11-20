@@ -104,7 +104,7 @@ const DEFAULT_SPLASH = {
   voicePitch: 0.9,
   identityName: 'MCHOSE USER',
   identityId: 'MCHOSE-01',
-  welcomeName: 'Jay',
+  welcomeName: 'GXY',
   accessLevel: '03',
   accent: '#1f63ff',
   glitchA: '#ff3b30',
@@ -1111,7 +1111,11 @@ async function serveScheme(request) {
         } catch (e) {
           return part(404);
         }
-        return part(r.status, Object.assign({ 'Cache-Control': 'public, max-age=86400' }, r.headers), r.body);
+        /* 图片开场需要把壁纸画进 canvas 生成线稿，必须允许跨源读取像素 */
+        return part(r.status, Object.assign({
+          'Cache-Control': 'public, max-age=86400',
+          'Access-Control-Allow-Origin': '*'
+        }, r.headers), r.body);
       }
 
       if (host === 'media') {
@@ -1192,6 +1196,14 @@ async function serveScheme(request) {
         /* 裁剪预览小窗页面：走自定义协议，避免 data: 页面拿不到 mchose-wallpaper:// 资源 */
         if (rel === 'crop-preview') {
           return part(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }, Buffer.from(cropHtml(), 'utf8'));
+        }
+        /* 启动动画预览的空白宿主页：和自定义协议同源，壁纸 / 启动素材都能正常加载。
+           预览内容由 previewSplash 注入，避免 file:// 页面触发正式启动页的挂载流程。 */
+        if (rel === 'splash-preview') {
+          const shell = '<!doctype html><html class="theme-dark"><head><meta charset="utf-8">' +
+            '<style>html,body{width:100%;height:100%;margin:0;padding:0;overflow:hidden;background:transparent}</style>' +
+            '</head><body></body></html>';
+          return part(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }, Buffer.from(shell, 'utf8'));
         }
         return part(404);
       }
@@ -1901,6 +1913,9 @@ function updateSplash(patch) {
 }
 
 let previewWin = null;
+/* 启动动画只在本次应用启动的第一次打开时播放。
+   应用切到后台、台前调度恢复、或二次创建启动页时都直接沿用官方启动页，不再播放。 */
+let splashPlayedThisRun = false;
 
 function previewSplash() {
   const el = electron();
@@ -1912,21 +1927,7 @@ function previewSplash() {
       return 'focused';
     }
   } catch (e) { /* ignore */ }
-  const resPath = process.resourcesPath || path.join(__dirname, '..', '..');
-  /* 多路径兼容：插件自己的副本 > 官方 asar.unpacked > asar 内部（Electron 自动解） */
-  const htmlCandidates = [
-    path.join(__dirname, 'splash', 'startup-loading.html'),          /* 插件 payload 自带副本 */
-    path.join(resPath, 'app.asar.unpacked', 'bundled', 'renderer', 'startup-loading.html'),
-    path.join(resPath, 'app.mhub-wallpaper-original.asar.unpacked', 'bundled', 'renderer', 'startup-loading.html'),
-    path.join(resPath, 'app.asar', 'bundled', 'renderer', 'startup-loading.html')
-  ];
-  let html = '';
-  for (const cand of htmlCandidates) {
-    if (fs.existsSync(cand)) { html = cand; break; }
-  }
   try {
-    if (!html) return 'no splash html (checked ' + htmlCandidates.length + ' paths)';
-    const theme = state.splash.theme === 'light' ? 'light' : 'dark';
     const win = new el.BrowserWindow({
       width: 1180,
       height: 740,
@@ -1934,13 +1935,41 @@ function previewSplash() {
       transparent: true,
       backgroundColor: '#00000000',
       hasShadow: true,
-      resizable: false,
+      resizable: true,
       show: true,
       title: 'M HUB Startup Preview',
       webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: false }
     });
     previewWin = win;
-    win.loadFile(html, { query: { theme: theme } });
+    /* 走自定义协议的空白宿主页：同源，才能加载壁纸和启动素材。
+       绝不能直接 loadFile(startup-loading.html)：那个 URL 会被 isStartup() 命中，
+       dom-ready 时 mountSplash 会二次替换 body，导致已经启动的动画实例全部失效 → 黑屏。 */
+    win.loadURL(SCHEME + '://ui/splash-preview');
+    const wc = win.webContents;
+    wc.once('did-finish-load', function () {
+      let rt;
+      try { rt = buildSplashRuntime(); } catch (e) {
+        log('warn', 'splash preview runtime missing: ' + (e && e.message));
+        return;
+      }
+      let cfg;
+      try { cfg = splashConfigForInject(); } catch (e) { cfg = state.splash; }
+      const mount = 'window.__MHUBSplashConfig=' + toJs(cfg) + ';' +
+        'window.__MHUB_SPLASH_ASSETS=' + toJs(SCHEME + '://splash/startup-assets/') + ';' +
+        'window.__MHUB_SPLASH_PREVIEW=1;' +
+        'document.body.innerHTML=' + toJs(rt.markup) + ';';
+      Promise.resolve().then(function () {
+        return wc.insertCSS(rt.css);
+      }).then(function () {
+        return wc.executeJavaScript(mount, false);
+      }).then(function () {
+        return wc.executeJavaScript(rt.js, false);
+      }).then(function () {
+        log('info', 'splash preview mounted mode=' + (cfg && cfg.mode) + ' wc=' + wc.id);
+      }).catch(function (e) {
+        log('warn', 'splash preview mount failed: ' + (e && e.message));
+      });
+    });
     win.once('ready-to-show', function () { try { win.show(); win.focus(); } catch (e) { /* ignore */ } });
     win.on('closed', function () { if (previewWin === win) previewWin = null; });
 
@@ -2304,7 +2333,9 @@ function attach(wc) {
   if (!wc) return;
   /* 窗口刚创建时 URL 还是 about:blank，isStartup 判定不出来；
      只在"首次 attach"里装拦截会永远装不上，所以这里每次都要尝试（内部按窗口去重）。 */
-  try { installSplashGuard(wc); } catch (e) { log('warn', 'main-process splash guard install failed: ' + (e && e.message)); }
+  if (!splashPlayedThisRun) {
+    try { installSplashGuard(wc); } catch (e) { log('warn', 'main-process splash guard install failed: ' + (e && e.message)); }
+  }
   if (!attached.has(wc.id)) {
     attached.add(wc.id);
 
@@ -2365,24 +2396,31 @@ function attach(wc) {
     } catch (e) { /* ignore */ }
     try {
       wc.on('dom-ready', function () {
-        if (isStartup(wc)) {
-          /* 页面就绪时 URL 已经确定，这里立即装拦截/置顶，别等 1.2s 轮询。 */
-          try { installSplashGuard(wc); } catch (e) { /* ignore */ }
-          mountSplash(wc);
-          setTimeout(function () { injectStartup(wc, true); }, 220);
-          if (!previewWin || previewWin.isDestroyed() || previewWin.webContents !== wc) autoMaximizeStartup(wc);
+        if (!isStartup(wc)) return;
+        /* 只在本次运行的第一次打开播放；后台恢复 / 台前调度 / 二次显示都不播 */
+        if (splashPlayedThisRun) {
+          try { log('info', 'startup animation skipped (already played this run)'); } catch (_) {}
+          return;
         }
+        splashPlayedThisRun = true;
+        /* 页面就绪时 URL 已经确定，这里立即装拦截/置顶，别等 1.2s 轮询。 */
+        try { installSplashGuard(wc); } catch (e) { /* ignore */ }
+        mountSplash(wc);
+        setTimeout(function () { injectStartup(wc, true); }, 220);
+        if (!previewWin || previewWin.isDestroyed() || previewWin.webContents !== wc) autoMaximizeStartup(wc);
       });
     } catch (e) { /* ignore */ }
     try {
       wc.on('did-finish-load', function () {
-        if (isStartup(wc)) setTimeout(function () { injectStartup(wc, true); }, 200);
+        if (isStartup(wc) && splashPlayedThisRun) setTimeout(function () { injectStartup(wc, true); }, 200);
       });
     } catch (e) { /* ignore */ }
   }
   if (isStartup(wc)) {
-    injectStartup(wc);
-    if (!previewWin || previewWin.isDestroyed() || previewWin.webContents !== wc) autoMaximizeStartup(wc);
+    if (!splashPlayedThisRun) {
+      injectStartup(wc);
+      if (!previewWin || previewWin.isDestroyed() || previewWin.webContents !== wc) autoMaximizeStartup(wc);
+    }
     return;
   }
   if (isTarget(wc)) {

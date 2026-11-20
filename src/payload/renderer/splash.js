@@ -40,6 +40,7 @@
     voiceVolume: 90,
     voiceRate: 0.9,
     voicePitch: 0.9,
+    welcomeName: 'GXY',
     identityName: 'MCHOSE USER',
     identityId: 'MCHOSE-01',
     accessLevel: '03',
@@ -275,225 +276,372 @@
     var speed = Math.max(0.5, Number(cfg.speed) || 1)
 
     /* ────────────────────────────────────────────────────────────────────────
-       纯代码复刻 ChatGPT macOS 启动序列（非视频）：
-       锁屏 → 解锁 → 桌面菜单栏 + Dock → App 窗口展开
-       → “welcome Jay” 彩虹手写 → 云朵形变 → 主界面
-       ios / dragon 两个模式共用，仅节奏略有差异
-       ─────────────────────────────────────────────────────────────────────── */
+       iOS 18「Welcome」流线开机动画（复刻 iPhone / iPad 首次开机）
+       一条彩色流线：勾勒 Welcome <名字> → 流向右中位置勾勒 MCHOSE K 标
+       → 从圆形图标中心隧道式放大 → 进入应用
+       ──────────────────────────────────────────────────────────────────────── */
     if (cfg.mode === 'ios') {
-      boot2Branch()
+      iosWelcomeBranch()
       return
     }
 
-    function boot2Branch() {
-      var T = 1.0
-      function a(ms, fn) { var id = setTimeout(fn, Math.round(ms * T / speed)); timers.push(id); return id }
-      function pad2(n) { return n < 10 ? '0' + n : '' + n }
-      wrap.classList.add('b3')
+    function iosWelcomeBranch() {
+      var T = Math.max(0.5, Number(cfg.speed) || 1)
+      var NS = 'http://www.w3.org/2000/svg'
+      wrap.classList.add('iosv')
 
-      /* 注入 CSS */
-      var bcss = document.createElement('style')
-      bcss.textContent = [
-        '.b3{position:absolute;inset:0;background:#000;overflow:hidden;font-family:-apple-system,"SF Pro Text","PingFang SC","Microsoft YaHei",system-ui,sans-serif;--e:cubic-bezier(.25,.6,.3,1)}' +
-        '.b3 *{box-sizing:border-box;margin:0;padding:0}' +
-        /* 壁纸（锁屏 + 桌面同源，交叉淡入） */
-        '.b3-wall{position:absolute;inset:0;overflow:hidden;background:#0b1020}' +
-        '.b3-wall img,.b3-wall video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}' +
-        '.b3-wall-ls>img,.b3-wall-ls>video{filter:brightness(.6) saturate(.95);transition:filter 1s var(--e),opacity 1s var(--e)}' +
-        '.b3-wall-desk{opacity:0;transition:opacity 1s var(--e)}' +
-        '.b3.unlock .b3-wall-desk{opacity:1}' +
-        '.b3.unlock .b3-wall-ls{opacity:0;transition:opacity .8s var(--e)}' +
-        '.b3-lsveil{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.3) 0%,rgba(0,0,0,0) 20%,rgba(0,0,0,0) 60%,rgba(0,0,0,.45) 100%);transition:opacity .7s var(--e)}' +
-        '.b3.unlock .b3-lsveil{opacity:0}' +
-        /* 锁屏时钟 */
-        '.b3-lstime{position:absolute;left:0;right:0;top:15%;text-align:center;color:#fff;opacity:0;transform:translateY(10px);transition:opacity 1s var(--e) .15s,transform 1s var(--e) .15s}' +
-        '.b3.in .b3-lstime{opacity:1;transform:none}' +
-        '.b3.unlock .b3-lstime{opacity:0;transition:opacity .45s var(--e)}' +
-        '.b3-lstime .d{font-size:clamp(15px,2vw,21px);font-weight:500;opacity:.92}' +
-        '.b3-lstime .t{font-size:clamp(84px,15vw,172px);font-weight:250;line-height:.98;letter-spacing:-.02em;margin-top:2px;text-shadow:0 2px 26px rgba(0,0,0,.3)}' +
-        /* 锁屏右上状态 */
-        '.b3-lstop{position:absolute;right:26px;top:50px;color:#fff;font-size:14px;letter-spacing:.12em;opacity:0;transition:opacity .8s var(--e) .3s}' +
-        '.b3.in .b3-lstop{opacity:.9}' +
-        '.b3.unlock .b3-lstop{opacity:0;transition:opacity .4s var(--e)}' +
-        /* 锁屏底部生物解锁 */
-        '.b3-lsbio{position:absolute;left:50%;bottom:54px;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;color:#fff;opacity:0;transition:opacity .8s var(--e) .4s}' +
-        '.b3.in .b3-lsbio{opacity:1}' +
-        '.b3.unlock .b3-lsbio{opacity:0;transition:opacity .35s var(--e)}' +
-        '.b3-lsbio .av{width:46px;height:46px;border-radius:50%;background:linear-gradient(140deg,#4a5a8a,#20263a);display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:600;color:#cdd7ef;box-shadow:0 2px 14px rgba(0,0,0,.45)}' +
-        '.b3-lsbio .nm{font-size:13px;font-weight:600}' +
-        '.b3-lsbio .hint{font-size:11.5px;opacity:.72}' +
-        /* 桌面菜单栏 */
-        '.b3-menu{position:absolute;left:0;right:0;top:0;height:26px;z-index:8;display:flex;align-items:center;gap:15px;padding:0 14px;font-size:12.5px;color:#fff;background:rgba(24,26,34,.5);backdrop-filter:blur(20px) saturate(1.5);-webkit-backdrop-filter:blur(20px) saturate(1.5);opacity:0;transform:translateY(-100%);transition:opacity .45s var(--e),transform .45s var(--e)}' +
-        '.b3.unlock .b3-menu{opacity:1;transform:none}' +
-        '.b3-menu .brand{font-weight:700;display:flex;align-items:center;gap:6px}' +
-        '.b3-menu .brand i{width:13px;height:13px;border-radius:3px;background:linear-gradient(135deg,#fff,#c7d2ff);display:inline-block}' +
-        '.b3-menu .mi{opacity:.92}' +
-        '.b3-menu .rt{margin-left:auto;display:flex;align-items:center;gap:12px;opacity:.92}' +
-        '.b3-menu .bat{width:22px;height:11px;border:1px solid rgba(255,255,255,.85);border-radius:3px;padding:1px}' +
-        '.b3-menu .bat i{display:block;height:100%;width:80%;background:#fff;border-radius:1px}' +
-        /* Dock */
-        '.b3-dock{position:absolute;left:50%;bottom:18px;transform:translateX(-50%) translateY(26px);z-index:8;display:flex;align-items:flex-end;gap:11px;padding:9px 14px;border-radius:20px;background:rgba(255,255,255,.14);backdrop-filter:blur(22px) saturate(1.6);-webkit-backdrop-filter:blur(22px) saturate(1.6);box-shadow:0 8px 34px rgba(0,0,0,.35),inset 0 0 0 .5px rgba(255,255,255,.22);opacity:0;transition:opacity .5s var(--e) .15s,transform .55s var(--e) .15s}' +
-        '.b3.unlock .b3-dock{opacity:1;transform:translateX(-50%)}' +
-        '.b3-dock .di{width:46px;height:46px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:20px;box-shadow:0 3px 9px rgba(0,0,0,.28);position:relative}' +
-        '.b3-dock .di.hl{transform:translateY(-6px);outline:2px solid rgba(255,255,255,.55);outline-offset:1px}' +
-        '.b3-dock .di.hl::after{content:"M HUB";position:absolute;bottom:calc(100% + 7px);left:50%;transform:translateX(-50%);white-space:nowrap;font-size:11px;padding:2px 7px;border-radius:5px;background:rgba(30,32,40,.92);color:#fff}' +
-        /* App 窗口 */
-        '.b3-app{position:absolute;left:50%;top:50%;width:min(900px,86vw);height:min(580px,72vh);transform:translate(-50%,-50%) scale(.82);opacity:0;z-index:12;border-radius:11px;overflow:hidden;background:#141518;box-shadow:0 26px 90px rgba(0,0,0,.6),0 3px 10px rgba(0,0,0,.35);transition:transform .85s var(--e),opacity .6s var(--e)}' +
-        '.b3.appopen .b3-app{transform:translate(-50%,-50%) scale(1);opacity:1}' +
-        '.b3-bar{height:36px;display:flex;align-items:center;padding:0 12px;background:#26282e;gap:8px}' +
-        '.b3-bar .tl{display:flex;gap:7px}' +
-        '.b3-bar .tl i{width:12px;height:12px;border-radius:50%;display:block}' +
-        '.b3-bar .tl i.r{background:#ff5f57}.b3-bar .tl i.y{background:#febc2e}.b3-bar .tl i.g{background:#28c840}' +
-        '.b3-bar .tt{font-size:12.5px;color:#c9cdd6;font-weight:600;margin-left:6px}' +
-        '.b3-body{position:absolute;inset:36px 0 0 0;background:#131417;display:flex;align-items:center;justify-content:center;overflow:hidden}' +
-        '.b3-hand{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);text-align:center;white-space:nowrap;z-index:3;transition:opacity .5s var(--e),transform .5s var(--e)}' +
-        '.b3-hand .w{display:inline-block;font-family:"Segoe Script","Snell Roundhand","Brush Script MT","Lucida Handwriting","Segoe Print",cursive;font-size:clamp(46px,7vw,104px);line-height:1;font-weight:400;background:linear-gradient(90deg,#ff5d8f 0%,#ff9f43 16%,#ffd93d 32%,#51cf66 50%,#4dabf7 68%,#da77f2 86%,#ff5d8f 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;clip-path:inset(0 100% 0 0);opacity:0;filter:blur(3px)}' +
-        '.b3.hand1 .b3-hand .w{animation:b3write 2.15s var(--e) forwards}' +
-        '@keyframes b3write{0%{clip-path:inset(0 100% 0 0);opacity:0;filter:blur(3px)}12%{opacity:1}100%{clip-path:inset(0 0 0 0);opacity:1;filter:blur(0)}}' +
-        '.b3-hand .n{display:inline-block;margin-left:.16em;font-family:"Segoe Script","Snell Roundhand","Brush Script MT","Lucida Handwriting",cursive;font-size:clamp(40px,6vw,90px);line-height:1;font-weight:400;transform:rotate(-4deg) translateY(-.04em);background:linear-gradient(90deg,#f06595 0%,#b197fc 55%,#845ef7 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;clip-path:inset(0 100% 0 0);opacity:0;filter:blur(3px)}' +
-        '.b3.hand2 .b3-hand .n{animation:b3write 1.5s var(--e) forwards}' +
-        '.b3.handout .b3-hand{opacity:0;transform:translate(-50%,-50%) scale(1.06)}' +
-        /* 云朵 UI */
-        '.b3-cloud{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) scale(.4);opacity:0;z-index:5;width:min(640px,76vw);height:min(540px,64vh);display:flex;align-items:center;justify-content:center;transition:opacity .5s var(--e),transform .9s var(--e)}' +
-        '.b3.cloudon .b3-cloud{opacity:1;transform:translate(-50%,-50%) scale(1)}' +
-        '.b3.cloudout .b3-cloud{opacity:0;transform:translate(-50%,-50%) scale(1.35);transition:opacity .45s var(--e),transform .55s var(--e)}' +
-        '.b3-cloud{background:linear-gradient(#fff,#fff) padding-box,linear-gradient(135deg,#ffd93d,#51cf66,#4dabf7,#da77f2) border-box;border:3px solid transparent;border-radius:28px;box-shadow:0 22px 64px rgba(0,0,0,.38)}' +
-        '.b3-cloud .brandmark{display:flex;justify-content:center;margin-bottom:16px}' +
-        '.b3-cloud .brandmark svg{width:108px;height:auto;display:block}' +
-        '.b3-cloud .inner{position:relative;z-index:2;text-align:center;width:100%;padding:0 14%}' +
-        '.b3-cloud .q{font-size:clamp(17px,2.3vw,29px);font-weight:600;color:#1a1a1a;margin-bottom:15px}' +
-        '.b3-cloud .box{width:100%;height:80px;border-radius:12px;background:#f4f4f5;box-shadow:inset 0 0 0 1px #e3e3e6;display:flex;align-items:flex-start;padding:13px 16px;color:#9aa0aa;font-size:13px}' +
-        '.b3-cloud .box::before{content:"使用 M HUB Work"}' +
-        /* 最终 UI */
-        '.b3-final{position:absolute;inset:0;z-index:4;background:#fff;opacity:0;transition:opacity .55s var(--e);display:flex}' +
-        '.b3.final .b3-final{opacity:1}' +
-        '.b3-final .side{width:186px;background:#f7f7f8;border-right:1px solid #ececee;padding:16px 10px;font-size:13px;color:#3a3a3a}' +
-        '.b3-final .side .row{height:30px;border-radius:7px;display:flex;align-items:center;gap:8px;padding:0 9px;margin-bottom:4px}' +
-        '.b3-final .side .row.on{background:#ececee}' +
-        '.b3-final .main{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px}' +
-        '.b3-final .main .q{font-size:clamp(19px,2.5vw,31px);font-weight:600;color:#1a1a1a}' +
-        '.b3-final .main .box{width:min(520px,56vw);height:94px;border-radius:14px;background:#f7f7f8;box-shadow:inset 0 0 0 1px #e6e6e9;padding:14px 16px;color:#9aa0aa;font-size:13px}' +
-        '.b3-final .main .box::before{content:"使用 M HUB Work"}' +
-        '.b3.done .b3-menu,.b3.done .b3-dock{opacity:0;transition:opacity .4s var(--e)}'
+      /* ── 样式：iOS 18 毛玻璃（模糊 + 乳白薄雾，不使用液态玻璃的高光折射） ── */
+      var css = document.createElement('style')
+      css.textContent = [
+        '.dsu-alt.iosv{background:#07080d}' +
+        '.dsu-iosv-bg{position:absolute;inset:-5%;z-index:0;overflow:hidden}' +
+        '.dsu-iosv-bg img,.dsu-iosv-bg video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;' +
+        'filter:blur(38px) saturate(128%) brightness(.45);opacity:0;transition:opacity 1.2s ease,filter 2s ease;will-change:opacity,filter}' +
+        '.iosv.ready .dsu-iosv-bg img,.iosv.ready .dsu-iosv-bg video{opacity:1;filter:blur(26px) saturate(136%) brightness(.5)}' +
+        '.dsu-iosv-bg-fallback{position:absolute;inset:0;background:radial-gradient(120% 110% at 50% 28%,#48548f 0%,#232a52 44%,#0a0c18 100%)}' +
+        '.dsu-iosv-frost{position:absolute;inset:0;z-index:2;pointer-events:none;opacity:0;transition:opacity 1.5s ease;' +
+        'background:linear-gradient(158deg,rgba(255,255,255,.14) 0%,rgba(255,255,255,.055) 34%,rgba(255,255,255,.02) 66%,rgba(255,255,255,.07) 100%);' +
+        'backdrop-filter:blur(34px) saturate(115%);-webkit-backdrop-filter:blur(34px) saturate(115%)}' +
+        '.iosv.ready .dsu-iosv-frost{opacity:1}' +
+        '.dsu-iosv-veil{position:absolute;inset:0;z-index:2;pointer-events:none;' +
+        'background:radial-gradient(120% 100% at 50% 34%,rgba(4,6,12,.55) 0%,rgba(3,4,9,.72) 58%,rgba(1,2,5,.9) 100%)}' +
+        '.dsu-iosv-svg{position:absolute;inset:0;z-index:4;width:100%;height:100%;display:block}' +
+        '#iosvWorld{transform-box:view-box;transform-origin:1120px 445px;will-change:transform}' +
+        '#iosvWord,#iosvK,#iosvRing,#iosvLink,#iosvTunnel{fill:none;stroke:url(#iosvStroke);stroke-linecap:round;stroke-linejoin:round;' +
+        'vector-effect:non-scaling-stroke}' +
+        '#iosvWordIn path,#iosvK path{fill:none;stroke:url(#iosvStroke);stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}' +
+        '#iosvWordIn path{stroke-width:3}' +
+        '#iosvK path{stroke-width:2.6}' +
+        '#iosvLink{stroke-width:2.8}' +
+        '#iosvRing{transform-box:view-box;transform-origin:1120px 445px}' +
+        '#iosvRing circle{fill:none;stroke:url(#iosvStroke);stroke-width:1.5;vector-effect:non-scaling-stroke}' +
+        '#iosvTunnel circle{fill:none;stroke:url(#iosvStroke);stroke-width:1.2;vector-effect:non-scaling-stroke}' +
+        '.dsu-iosv-flash{position:absolute;inset:0;z-index:6;pointer-events:none;opacity:0;' +
+        'background:radial-gradient(82% 82% at 70% 49%,#ffffff 0%,rgba(255,255,255,.99) 46%,rgba(255,255,255,.94) 78%,rgba(255,255,255,.86) 100%)}' +
+        '.iosv .dsu-alt-brand{display:none}'
       ].join('')
-      document.head.appendChild(bcss)
+      document.head.appendChild(css)
 
-      /* 构建 DOM ──── */
+      /* ── 背景：当前驱动壁纸（模糊 + 毛玻璃） ── */
+      var bg = document.createElement('div')
+      bg.className = 'dsu-iosv-bg'
       var wp = cfg.wpBg
-      function mkWall(cls, fallback) {
-        var d = document.createElement('div')
-        d.className = 'b3-wall ' + cls
-        if (wp && wp.kind === 'video' && wp.url) {
-          var v = document.createElement('video')
-          v.src = wp.url; v.muted = true; v.loop = true; v.autoplay = true; v.playsInline = true
-          d.appendChild(v); try { v.play().catch(function () {}) } catch (e) {}
-        } else if (wp && wp.kind === 'image' && wp.url) {
-          var im = document.createElement('img'); im.src = wp.url; d.appendChild(im)
-        } else {
-          d.style.background = fallback
+      if (wp && wp.kind === 'video' && wp.url) {
+        var bv = document.createElement('video')
+        bv.src = wp.url; bv.muted = true; bv.loop = true; bv.autoplay = true; bv.playsInline = true
+        if (wp.poster) bv.poster = wp.poster
+        bg.appendChild(bv)
+        try { bv.play().catch(function () {}) } catch (e) {}
+      } else if (wp && wp.kind === 'image' && wp.url) {
+        var bi = document.createElement('img')
+        bi.src = wp.url; bi.alt = ''
+        bg.appendChild(bi)
+      } else {
+        var bf = document.createElement('div')
+        bf.className = 'dsu-iosv-bg-fallback'
+        bg.appendChild(bf)
+      }
+      wrap.appendChild(bg)
+      var frost = document.createElement('div'); frost.className = 'dsu-iosv-frost'; wrap.appendChild(frost)
+      var veil = document.createElement('div'); veil.className = 'dsu-iosv-veil'; wrap.appendChild(veil)
+
+      /* ── SVG 画布 ── */
+      var svg = document.createElementNS(NS, 'svg')
+      svg.setAttribute('class', 'dsu-iosv-svg')
+      svg.setAttribute('viewBox', '0 0 1600 900')
+      svg.setAttribute('preserveAspectRatio', 'xMidYMid slice')
+      var STOP = '<stop offset="0" stop-color="#64D2FF"/><stop offset=".16" stop-color="#0A84FF"/>' +
+        '<stop offset=".34" stop-color="#5E5CE6"/><stop offset=".5" stop-color="#BF5AF2"/>' +
+        '<stop offset=".64" stop-color="#FF2D55"/><stop offset=".78" stop-color="#FF9F0A"/>' +
+        '<stop offset=".9" stop-color="#FFD60A"/><stop offset="1" stop-color="#30D158"/>'
+      var KMARK = '<path d="M275 0 L260 10 L2 270 L0 430 L5 436 L12 438 L13 438 L21 434 L435 20 L438 8 L431 0 Z"/>' +
+        '<path d="M582 0 L568 9 L302 275 L298 284 L298 293 L303 303 L572 571 L581 576 L737 576 L744 569 L743 559 L531 348 L474 290 L474 286 L744 16 L745 8 L737 0 Z"/>' +
+        '<path d="M227 358 L214 363 L18 559 L16 568 L23 576 L180 576 L188 572 L304 456 L310 442 L306 427 L244 364 L230 358 Z"/>'
+      svg.innerHTML =
+        '<defs>' +
+        '<linearGradient id="iosvStroke" x1="0" y1="0" x2="1" y2="1">' + STOP + '</linearGradient>' +
+        '<linearGradient id="iosvFill" x1="0" y1="0" x2="1" y2="0">' + STOP + '</linearGradient>' +
+        '<filter id="iosvGlowWord" x="-30%" y="-60%" width="160%" height="220%">' +
+        '<feGaussianBlur stdDeviation="46" result="b"/>' +
+        '<feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>' +
+        '<filter id="iosvGlowK" x="-40%" y="-40%" width="180%" height="180%">' +
+        '<feGaussianBlur stdDeviation="9" result="b"/>' +
+        '<feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>' +
+        '</defs>' +
+        '<g id="iosvWorld">' +
+        '<g id="iosvWord" filter="url(#iosvGlowWord)"><g id="iosvWordIn"></g></g>' +
+        '<path id="iosvLink" d=""/>' +
+        '<g id="iosvK" opacity="0" filter="url(#iosvGlowK)" transform="translate(1120 445) scale(.434) translate(-372.5 -288)">' + KMARK + '</g>' +
+        '<g id="iosvTunnel" opacity="0"><circle cx="1120" cy="445" r="150"/><circle cx="1120" cy="445" r="210"/>' +
+        '<circle cx="1120" cy="445" r="285"/><circle cx="1120" cy="445" r="360"/></g>' +
+        '<g id="iosvRing" opacity="0"><circle cx="1120" cy="445" r="188"/><circle cx="1120" cy="445" r="218"/></g>' +
+        '</g>'
+      wrap.appendChild(svg)
+      var flash = document.createElement('div'); flash.className = 'dsu-iosv-flash'; wrap.appendChild(flash)
+
+      var world = svg.querySelector('#iosvWorld')
+      var wordOuter = svg.querySelector('#iosvWord')
+      var wordG = svg.querySelector('#iosvWordIn')
+      var link = svg.querySelector('#iosvLink')
+      var kG = svg.querySelector('#iosvK')
+      var ringG = svg.querySelector('#iosvRing')
+      var tunnelG = svg.querySelector('#iosvTunnel')
+
+      var name = String(cfg.welcomeName || 'GXY').replace(/\s+/g, ' ').trim().slice(0, 18)
+      var text = ('Welcome ' + name).trim()
+
+      /* 字形轮廓数据按需加载（仅 welcome 动画使用） */
+      function loadGlyphs(done) {
+        if (window.__MHUB_WELCOME_GLYPHS) { done(); return }
+        var gs = document.createElement('script')
+        gs.src = (window.__MHUB_SPLASH_ASSETS || './startup-assets/') + 'welcome-glyphs.js'
+        gs.onload = function () { done() }
+        gs.onerror = function () { done() }
+        document.head.appendChild(gs)
+      }
+      loadGlyphs(function () {
+
+      /* ── 用字形轮廓数据搭建文字（每个字母一条 path，轮廓按字体顺序勾勒） ── */
+      var G = window.__MHUB_WELCOME_GLYPHS || null
+      var glyphPaths = []
+      var cursor = 0
+      var missing = 0
+      if (G && G.glyphs) {
+        for (var ci = 0; ci < text.length; ci++) {
+          var ch = text.charAt(ci)
+          var g = G.glyphs[ch]
+          if (!g && ch === ' ') g = { a: G.units * 0.25, d: '' }
+          if (!g) { missing++; g = G.glyphs['?'] }
+          if (!g) continue
+          if (g.d) {
+            var p = document.createElementNS(NS, 'path')
+            p.setAttribute('d', g.d)
+            p.setAttribute('transform', 'translate(' + cursor + ' 0)')
+            p.setAttribute('fill-rule', 'evenodd')
+            p.__ox = cursor
+            wordG.appendChild(p)
+            glyphPaths.push(p)
+          }
+          cursor += g.a
         }
-        stage.appendChild(d)
       }
-      mkWall('b3-wall-desk', 'linear-gradient(160deg,#2a3a72 0%,#141a3a 58%,#05060f 100%)')
 
-      /* 手写版：直接进入桌面 + 已展开的 App 窗口，只保留手写 welcome 段 */
-      var now = new Date()
+      var fallbackWord = false
+      var cxu = 0, cyu = 0
+      if (!glyphPaths.length || missing > 0) {
+        fallbackWord = true
+        while (wordG.firstChild) wordG.removeChild(wordG.firstChild)
+        var tEl = document.createElementNS(NS, 'text')
+        tEl.setAttribute('x', '0'); tEl.setAttribute('y', '0')
+        tEl.setAttribute('text-anchor', 'middle')
+        tEl.setAttribute('font-family', '"Segoe Script","Snell Roundhand","Brush Script MT","PingFang SC","Microsoft YaHei",cursive')
+        tEl.setAttribute('font-size', '168')
+        tEl.setAttribute('fill', 'url(#iosvFill)')
+        tEl.setAttribute('opacity', '0')
+        tEl.textContent = text
+        wordG.appendChild(tEl)
+        wordG.setAttribute('transform', 'translate(800 486)')
+      } else {
+        var bb = wordG.getBBox()
+        var s = Math.min(bb.width ? 1160 / bb.width : 1, bb.height ? 236 / bb.height : 1)
+        if (!isFinite(s) || s <= 0) s = 0.1
+        cxu = bb.x + bb.width / 2
+        cyu = bb.y + bb.height / 2
+        wordG.setAttribute('transform',
+          'translate(800 450) scale(' + s + ' ' + (-s) + ') translate(' + (-cxu) + ' ' + (-cyu) + ')')
+        wordG.__scale = s
+      }
 
-      /* 桌面菜单栏 */
-      var menu = document.createElement('div')
-      menu.className = 'b3-menu'
-      menu.innerHTML = '<span class="brand"><i></i>M HUB</span>' +
-        '<span class="mi">文件</span><span class="mi">编辑</span><span class="mi">显示</span>' +
-        '<span class="mi">前往</span><span class="mi">窗口</span><span class="mi">帮助</span>' +
-        '<span class="rt"><span class="mt">' + pad2(now.getHours()) + ':' + pad2(now.getMinutes()) + '</span><span class="bat"><i></i></span></span>'
-      stage.appendChild(menu)
+      /* ── 书写节奏：按屏幕像素长度换算，速度贴近苹果原生 ── */
+      var wordScale = wordG.__scale || 0.1
+      var segs = glyphPaths.map(function (p) {
+        var len = 0
+        try { len = p.getTotalLength() || 0 } catch (e) { len = 0 }
+        var a = null, b = null
+        try { a = p.getPointAtLength(0); b = p.getPointAtLength(len) } catch (e) { a = b = null }
+        var ox = p.__ox || 0
+        return {
+          el: p, len: len,
+          sx: a ? a.x + ox : 0, sy: a ? a.y : 0,
+          ex: b ? b.x + ox : 0, ey: b ? b.y : 0
+        }
+      }).filter(function (it) { return it.len > 0.5 })
 
-      /* Dock */
-      var dock = document.createElement('div')
-      dock.className = 'b3-dock'
-      var dockDefs = [
-        ['🗂','#7aa2ff'],['🎨','#ff9f43'],['💬','#51cf66'],['🎵','#ff6b6b'],
-        ['📧','#4dabf7'],['📁','#fcc419'],['⬛','#1b1d22'],['🌐','#22b8cf'],
-        ['🖼','#da77f2'],['🗑','#868e96']
-      ]
-      dockDefs.forEach(function (ic, i) {
-        var d = document.createElement('div')
-        d.className = 'di' + (i === 6 ? ' hl' : '')
-        d.style.background = 'linear-gradient(150deg,' + ic[1] + ',rgba(0,0,0,.3))'
-        d.textContent = ic[0]
-        dock.appendChild(d)
+      var totalPx = 0
+      for (var si = 0; si < segs.length; si++) totalPx += segs[si].len * wordScale
+      var wordSec = Math.max(3.2, Math.min(4.3, totalPx / 400))
+      var pxPerSec = totalPx / wordSec
+
+      var t0 = 0.4
+      var t = t0
+      var prevSeg = null
+      for (var gi = 0; gi < segs.length; gi++) {
+        var seg = segs[gi]
+        var el = seg.el
+        var gx = seg.sx - (prevSeg ? prevSeg.ex : seg.sx)
+        var gy = seg.sy - (prevSeg ? prevSeg.ey : seg.sy)
+        var jumpPx = Math.hypot(gx, gy) * wordScale
+        /* 上一笔的收笔到下一笔起笔之间用短线连起来；太远的自然提笔，避免长斜线穿过画面 */
+        if (prevSeg && jumpPx > 1 && jumpPx < 50) {
+          var bridge = document.createElementNS(NS, 'path')
+          bridge.setAttribute('d', 'M' + prevSeg.ex + ' ' + prevSeg.ey + ' L' + seg.sx + ' ' + seg.sy)
+          bridge.style.stroke = 'url(#iosvStroke)'
+          bridge.style.strokeWidth = '2'
+          bridge.style.fill = 'none'
+          bridge.setAttribute('vector-effect', 'non-scaling-stroke')
+          wordG.appendChild(bridge)
+          var bLen = bridge.getTotalLength()
+          bridge.style.strokeDasharray = (bLen + 1) + ' ' + (bLen + 1)
+          bridge.style.strokeDashoffset = bLen + 1
+          var bDur = Math.max(30, (jumpPx / pxPerSec) * 1000)
+          bridge.animate([{ strokeDashoffset: bLen + 1 }, { strokeDashoffset: 0 }],
+            { duration: bDur, delay: t * 1000, easing: 'linear', fill: 'forwards' })
+          t += jumpPx / pxPerSec
+        }
+        el.style.strokeDasharray = (seg.len + 1) + ' ' + (seg.len + 1)
+        el.style.strokeDashoffset = seg.len + 1
+        var dur = Math.max(60, (seg.len * wordScale / pxPerSec) * 1000)
+        el.animate([{ strokeDashoffset: seg.len + 1 }, { strokeDashoffset: 0 }],
+          { duration: dur, delay: t * 1000, easing: 'linear', fill: 'forwards' })
+        t += dur / 1000
+        /* 每一笔落墨后立刻补同色填充，形成苹果那种彩色实心字 */
+        el.style.fill = 'url(#iosvFill)'
+        el.style.fillOpacity = '0'
+        el.animate([{ fillOpacity: 0 }, { fillOpacity: .92 }],
+          { duration: 460, delay: t * 1000, easing: 'ease', fill: 'forwards' })
+        prevSeg = seg
+      }
+      var wordEnd = t
+
+      if (fallbackWord) {
+        var ft = wordG.firstChild
+        if (ft) ft.animate([{ opacity: 0 }, { opacity: .95 }], { duration: 1400, delay: 400, easing: 'ease', fill: 'forwards' })
+        wordEnd = 1.9
+      }
+
+      /* ── 转场：文字左移淡出，流线转向右中位置画 K 标 ── */
+      var kPaths = Array.prototype.slice.call(kG.querySelectorAll('path'))
+      var lastSeg = segs.length ? segs[segs.length - 1] : null
+      var wSX = lastSeg ? 800 + wordScale * (lastSeg.ex - cxu) : 720
+      var wSY = lastSeg ? 450 - wordScale * (lastSeg.ey - cyu) : 480
+      /* 从文字收笔处找 K 标最近的一笔起笔点，保证流线自然接上 */
+      var kOrder = []
+      var kStartIndex = 0
+      var kBest = Infinity
+      for (var kj = 0; kj < kPaths.length; kj++) {
+        var kp0 = null
+        try { kp0 = kPaths[kj].getPointAtLength(0) } catch (e) { kp0 = { x: 275, y: 0 } }
+        var kwx = 1120 + 0.434 * (kp0.x - 372.5)
+        var kwy = 445 + 0.434 * (kp0.y - 288)
+        kOrder.push({ p: kPaths[kj], x: kwx, y: kwy })
+        var kdd = Math.hypot(kwx - wSX, kwy - wSY)
+        if (kdd < kBest) { kBest = kdd; kStartIndex = kj }
+      }
+      kOrder = kOrder.slice(kStartIndex).concat(kOrder.slice(0, kStartIndex))
+      var kSX = kOrder[0].x
+      var kSY = kOrder[0].y
+      var linkD = 'M' + wSX + ' ' + wSY +
+        ' C' + (wSX - 44) + ' ' + (wSY - 44) +
+        ' ' + (kSX + 36) + ' ' + (kSY - 16) +
+        ' ' + kSX + ' ' + kSY
+      link.setAttribute('d', linkD)
+      var linkLen = 0
+      try { linkLen = link.getTotalLength() } catch (e) { linkLen = 220 }
+      link.style.strokeDasharray = (linkLen + 1) + ' ' + (linkLen + 1)
+      link.style.strokeDashoffset = linkLen + 1
+      link.style.opacity = '1'
+      link.animate([{ strokeDashoffset: linkLen + 1 }, { strokeDashoffset: 0 }],
+        { duration: 520, delay: (wordEnd - 0.06) * 1000, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' })
+
+      wordOuter.animate(
+        [{ opacity: 1, transform: 'translateX(0px)' }, { opacity: 0, transform: 'translateX(-230px)' }],
+        { duration: 1450, delay: (wordEnd + 0.02) * 1000, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' })
+
+      /* K 标：从最近的一笔开始顺序描出，速度略快于文字 */
+      var kStart = wordEnd + 0.3
+      var kt = kStart
+      for (var ki = 0; ki < kOrder.length; ki++) {
+        var kp = kOrder[ki].p
+        var kl = 0
+        try { kl = kp.getTotalLength() } catch (e) { kl = 300 }
+        kp.style.strokeDasharray = (kl + 1) + ' ' + (kl + 1)
+        kp.style.strokeDashoffset = kl + 1
+        /* K 标组缩放 0.434：按屏幕像素控制书写速度 */
+        var kdur = Math.max(180, Math.min(720, (kl * 0.434 / 1400) * 1000))
+        kp.animate([{ strokeDashoffset: kl + 1 }, { strokeDashoffset: 0 }],
+          { duration: kdur, delay: kt * 1000, easing: 'cubic-bezier(.45,.05,.3,1)', fill: 'forwards' })
+        kt += kdur / 1000
+      }
+      var kEnd = kt + 0.06
+      kG.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 240, delay: kStart * 1000, easing: 'ease', fill: 'forwards' })
+      /* 引线完成使命后淡出，避免 K 标旁边留一根飘线 */
+      link.animate([{ opacity: 1 }, { opacity: 0 }],
+        { duration: 560, delay: Math.max(0, kEnd - 0.18) * 1000, easing: 'ease', fill: 'forwards' })
+
+      /* 圆形图标描边 */
+      var ringCircles = Array.prototype.slice.call(ringG.querySelectorAll('circle'))
+      var rt = kEnd + 0.06
+      ringG.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200, delay: rt * 1000, easing: 'ease', fill: 'forwards' })
+      for (var ri = 0; ri < ringCircles.length; ri++) {
+        var rc = ringCircles[ri]
+        var rl = 0
+        try { rl = rc.getTotalLength() } catch (e) { rl = 1200 }
+        if (ri) {
+          rc.style.strokeDasharray = '3 11'
+          rc.style.opacity = '0'
+          rc.animate([{ opacity: 0 }, { opacity: .85 }],
+            { duration: 480, delay: rt * 1000, easing: 'ease', fill: 'forwards' })
+        } else {
+          rc.style.strokeDasharray = (rl + 1) + ' ' + (rl + 1)
+          rc.style.strokeDashoffset = rl + 1
+          rc.animate([{ strokeDashoffset: rl + 1 }, { strokeDashoffset: 0 }],
+            { duration: 520, delay: rt * 1000, easing: 'cubic-bezier(.35,0,.2,1)', fill: 'forwards' })
+        }
+      }
+      var tunnelStart = rt + 0.46
+
+      /* 隧道：从圆形图标中心放大整幅线条，白色光晕收束进应用 */
+      var tunnelMs = 1400
+      world.animate(
+        [{ transform: 'scale(1)' }, { transform: 'scale(1.35)', offset: .18 }, { transform: 'scale(16)' }],
+        { duration: tunnelMs, delay: tunnelStart * 1000, easing: 'cubic-bezier(.55,.02,.35,1)', fill: 'forwards' })
+      tunnelG.animate([{ opacity: 0 }, { opacity: .85 }, { opacity: 0 }],
+        { duration: tunnelMs, delay: tunnelStart * 1000, easing: 'ease-in', fill: 'forwards' })
+      ringG.animate([{ opacity: 1, transform: 'scale(1)' }, { opacity: 0, transform: 'scale(1.9)' }],
+        { duration: tunnelMs * .8, delay: (tunnelStart + .1) * 1000, easing: 'ease-in', fill: 'forwards' })
+      flash.animate([{ opacity: 0 }, { opacity: 0 }, { opacity: 1 }],
+        { duration: tunnelMs, delay: tunnelStart * 1000, easing: 'cubic-bezier(.6,0,.6,1)', fill: 'forwards' })
+
+      /* 倍速：WAAPI 的 playbackRate 会同时缩放延迟和时长 */
+      if (Math.abs(T - 1) > 0.001) {
+        try {
+          document.getAnimations().forEach(function (anim) { anim.playbackRate = 1 / T })
+        } catch (e) { /* ignore */ }
+      }
+
+      /* 保护窗口：整段动画播完前不允许主进程提前收窗 */
+      var totalMs = (tunnelStart + tunnelMs / 1000 + 0.18) * 1000 * T
+      altMinPlay = Math.max(altMinPlay, Math.round(totalMs) + 300)
+
+      requestAnimationFrame(function () { wrap.classList.add('ready') })
+      /* 录制 MP4 时不让自动收窗打断逐帧渲染 */
+      if (!window.__MHUB_SPLASH_RECORD) timer = setTimeout(function () { finish(680) }, totalMs + 260)
       })
-      stage.appendChild(dock)
-
-      /* App 窗口 */
-      var app = document.createElement('div')
-      app.className = 'b3-app'
-      app.innerHTML = '<div class="b3-bar"><div class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></div><span class="tt">M HUB</span></div>' +
-        '<div class="b3-body"><div class="b3-hand"><span class="w">welcome</span><span class="n"></span></div></div>'
-      stage.appendChild(app)
-      var body = app.querySelector('.b3-body')
-      app.querySelector('.b3-hand .n').textContent = (cfg.welcomeName || 'Jay')
-
-      /* 云朵 UI：四色渐变描边 + 内部内容 */
-      var CLOUD_PATH = 'M100 22 C114 22 124 31 126 43 C139 40 152 46 157 58 C169 59 178 69 176 81 C187 88 189 101 181 111 C187 123 180 137 167 140 C166 154 153 162 140 158 C132 170 116 173 105 165 C93 174 76 171 69 159 C55 161 42 151 42 138 C29 135 21 122 28 110 C18 102 22 86 34 81 C31 68 41 54 55 54 C58 41 71 30 84 31 C88 26 94 22 100 22 Z'
-      var cloud = document.createElement('div')
-      cloud.className = 'b3-cloud'
-      cloud.innerHTML = '<div class="inner">' +
-        '<div class="brandmark"><svg viewBox="0 0 745 576" aria-hidden="true"><use href="#kmark" fill="#111"/></svg></div>' +
-        '<div class="q">我们要做什么？</div><div class="box"></div></div>'
-      body.appendChild(cloud)
-
-      /* 最终 UI */
-      var fin = document.createElement('div')
-      fin.className = 'b3-final'
-      fin.innerHTML = '<div class="side"><div class="row on">✎ 新聊天</div><div class="row">◫ 项目</div><div class="row">◷ 最近</div><div class="row">⋯ 更多</div></div>' +
-        '<div class="main"><div class="q">我们要做什么？</div><div class="box"></div></div>'
-      body.appendChild(fin)
-
-      /* 时钟刷新（仅菜单栏） */
-      var clockInt = setInterval(function () {
-        var n = new Date()
-        var mEl = menu.querySelector('.mt'); if (mEl) mEl.textContent = pad2(n.getHours()) + ':' + pad2(n.getMinutes())
-      }, 1000); timers.push(clockInt)
-
-      /* 直接进入桌面（跳过锁屏/解锁），保留 App 展开的轻微动效 */
-      wrap.classList.add('in')
-      requestAnimationFrame(function () { wrap.classList.add('unlock', 'appopen') })
-
-      /* 只保留手写欢迎段：
-         1.0s  手写 “welcome”
-         3.2s  手写 “Jay”
-         5.0s  手写淡出 + 云朵形变
-         7.6s  云朵展开 → 主界面
-         9.3s  收尾 */
-      a(1000, function () { wrap.classList.add('hand1') })
-      a(3200, function () { wrap.classList.add('hand2') })
-      a(5000, function () { wrap.classList.add('handout', 'cloudon') })
-      a(7600, function () { wrap.classList.add('cloudout', 'final') })
-      a(9300, function () { clearInterval(clockInt); wrap.classList.add('done'); finish(700) })
-
-      /* 跳过：点击或 Esc */
-      var skipBound = false
-      function bindSkip() {
-        if (skipBound) return
-        skipBound = true
-        document.addEventListener('click', function () {
-          clearInterval(clockInt)
-          finish(500)
-        }, { once: true })
-        document.addEventListener('keydown', function (e) {
-          if (e.key === 'Escape') { clearInterval(clockInt); finish(400) }
-        }, { once: true })
-      }
-      a(1000, bindSkip)
     }
+
     if (cfg.mode === 'gallery') {
       var frame = document.createElement('iframe')
       frame.className = 'dsu-alt-frame'
-      frame.src = base + 'modes/gallery/index.html'
+      /* 图片开场：同款 Codex 启动序列，画面自动替换成当前驱动壁纸 */
+      var gsrc = base + 'modes/gallery/index.html?embedded=1'
+      var gwp = cfg.wpBg
+      var gimg = gwp ? (gwp.kind === 'image' ? gwp.url : (gwp.kind === 'video' ? (gwp.poster || '') : '')) : ''
+      if (gimg) gsrc += '&wp=' + encodeURIComponent(gimg)
+      gsrc += '&name=' + encodeURIComponent(String(cfg.welcomeName || 'GXY'))
+      frame.src = gsrc
       stage.appendChild(frame)
-      /* 原动画固定 12 秒，结束后淡出交还主窗口 */
-      timer = setTimeout(function () { finish(700) }, Math.round(12600 / speed))
+      /* 动画主体 12 秒；壁纸要现场生成线稿，末尾多留一点余量 */
+      timer = setTimeout(function () { finish(700) }, Math.round(15000 / speed))
       return
     }
 
