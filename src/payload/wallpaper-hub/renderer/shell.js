@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '4.1';
+  var VERSION = '4.3';
   var PREFIX = '[mhub-wp]';
   var existing = window.__mhubWallpaper;
   if (existing && existing.version === VERSION) {
@@ -1510,6 +1510,9 @@
       library: library, playback: playback, propsBox: propsBox
     };
     panelSig = '';
+    /* 面板被宿主卸载后重建时 propsBox 是全新空节点；不清掉属性签名会跳过重建，
+       导致「退出主题设置再进入后场景属性面板消失」。 */
+    propsSig = '';
     return sec;
   }
 
@@ -1749,12 +1752,11 @@
       ['moon', '月下持剑少女 · 线稿上色'],
       ['gallery', '图片开场 · 相册式'],
       ['dragon', '龙娘 · 1080P'],
-      ['ios', '手写欢迎 · welcome'],
       ['launcher', '缎带书写 · welcome → K 标']
     ]);
     refs.selects.push(mode);
     body.appendChild(mode.row);
-    if (state.splash.mode === 'ios' || state.splash.mode === 'launcher') {
+    if (state.splash.mode === 'launcher') {
       var wname = spText('手写名字（welcome 之后）', 'welcomeName', 'Jay');
       (refs.texts = refs.texts || []).push(wname);
       body.appendChild(wname.row);

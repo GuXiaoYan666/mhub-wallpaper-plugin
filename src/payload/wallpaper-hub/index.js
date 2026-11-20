@@ -31,7 +31,7 @@ const VIDEO_EXT = ['.mp4', '.webm', '.mov', '.mkv'];
 const IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
 const MAX_MANUAL_DEPTH = 4;
 const MAX_MANUAL_DIRS = 500;
-const VERSION = '4.1';
+const VERSION = '4.3';
 const AUTHOR = '顾小颜';
 
 function ensureDir(dir) {
@@ -76,7 +76,7 @@ const DEFAULT_BEAUTIFY = {
 
 const DEFAULT_SPLASH = {
   enabled: true,
-  mode: 'mhub',              // mhub=原生六幕 / moon=月下少女 / gallery=图片开场 / dragon=龙娘 / ios=液态玻璃 / launcher=缎带书写
+  mode: 'mhub',              // mhub=原生六幕 / moon=月下少女 / gallery=图片开场 / dragon=龙娘 / launcher=缎带书写
   bgMode: 'follow',          // follow=跟随壁纸 custom=指定壁纸 color=纯色 off=不铺背景
   bgId: '',
   bgColor: '#05070c',
@@ -147,7 +147,7 @@ function applyModeWallpaperSync() {
   setBackground('builtin:moon');
   return true;
 }
-/* 注入到启动页的配置（含运行时壁纸地址 wpBg，供 ios 模式把背景同步为驱动壁纸）。
+/* 注入到启动页的配置（含运行时壁纸地址 wpBg，供 launcher 缎带模式把背景同步为驱动壁纸）。
    不写回 state.splash，避免把运行时 URL 持久化到 state.json。 */
 function splashConfigForInject() {
   const cfg = Object.assign({}, state.splash);
@@ -219,7 +219,7 @@ const state = {
       if (saved.splash[key] !== undefined) state.splash[key] = saved.splash[key];
     }
   }
-  if (['mhub', 'moon', 'gallery', 'dragon', 'ios', 'launcher'].indexOf(state.splash.mode) === -1) state.splash.mode = 'mhub';
+  if (['mhub', 'moon', 'gallery', 'dragon', 'launcher'].indexOf(state.splash.mode) === -1) state.splash.mode = 'mhub';
   if (saved.hotkeys && typeof saved.hotkeys === 'object') {
     for (const key of Object.keys(DEFAULT_HOTKEYS)) {
       if (typeof saved.hotkeys[key] === 'string') state.hotkeys[key] = saved.hotkeys[key];
@@ -1587,6 +1587,35 @@ function buildSplashRuntime() {
   return splashRuntime;
 }
 
+/* 缎带书写的 Three.js 动画包。启动页是 file:// 页面，跨源 <script> 在个别
+   Electron 版本里会静默挂起（既没有 onload 也没有 onerror），表现为只剩背景、
+   一直卡在启动页。这里改由主进程按顺序直接注入，执行失败会写进日志。 */
+let launcherBundleCache = null;
+function launcherBundleCode() {
+  if (launcherBundleCache != null) return launcherBundleCache;
+  launcherBundleCache = fs.readFileSync(
+    path.join(SPLASH_DIR, 'startup-assets', 'modes', 'launcher', 'launcher.bundle.js'),
+    'utf8'
+  );
+  return launcherBundleCache;
+}
+
+function injectLauncherBundle(wc, mode) {
+  if (mode !== 'launcher') return Promise.resolve();
+  let code;
+  try {
+    code = launcherBundleCode();
+  } catch (e) {
+    log('warn', 'launcher bundle missing: ' + (e && e.message));
+    return Promise.resolve();
+  }
+  return wc.executeJavaScript(code, false).then(function () {
+    log('info', 'launcher bundle injected wc=' + wc.id + ' len=' + code.length);
+  }).catch(function (e) {
+    log('warn', 'launcher bundle inject failed: ' + (e && e.message));
+  });
+}
+
 /* 上一次运行遗留的启动页窗口：它们被关闭拦截挡住后一直留在后台，
    里面的六幕授权动画还在继续放声音，听上去就像"每个动画都带授权音频"。 */
 function closeStaleSplashWindows(current) {
@@ -1625,6 +1654,21 @@ function mountSplash(wc) {
     return;
   }
   try { wc.insertCSS(rt.css); } catch (e) { /* ignore */ }
+  /* 缎带书写要整屏透明画布。Windows 上透明窗口会走软件合成路径，
+     画布层可能不被合成（动画在跑但屏幕上只剩壁纸）。先尝试给窗口一个不透明底色，
+     让它回到正常合成路径；失败也不影响其它模式。 */
+  try {
+    let m0 = '';
+    try { m0 = String(splashConfigForInject().mode || ''); } catch (e) { /* ignore */ }
+    if (m0 === 'launcher') {
+      const el = electron();
+      const bw = el && el.BrowserWindow && el.BrowserWindow.fromWebContents(wc);
+      if (bw && !bw.isDestroyed()) {
+        bw.setBackgroundColor('#05060c');
+        log('info', 'launcher: splash window background set opaque');
+      }
+    }
+  } catch (e) { log('warn', 'launcher setBackgroundColor failed: ' + (e && e.message)); }
   const code = '(function(){try{' +
     'if(window.__MHUB_SPLASH_MOUNTED)return "mounted";' +
     'window.__MHUB_SPLASH_MOUNTED=1;' +
@@ -1639,9 +1683,13 @@ function mountSplash(wc) {
   const p = wc.executeJavaScript(code, false).then(function (r) {
     /* 已挂载过的窗口不再重复注入运行时，否则会创建第二套时间线/第二路声音。 */
     if (r === 'mounted') return;
-    return wc.executeJavaScript(rt.js, false).then(function () {
-      try { global.__mhubSplashFailed = false; } catch (e) {}
-      log('info', 'splash mounted wc=' + wc.id + ' (' + r + ')');
+    let mountMode = '';
+    try { mountMode = String(splashConfigForInject().mode || ''); } catch (e) { /* ignore */ }
+    return injectLauncherBundle(wc, mountMode).then(function () {
+      return wc.executeJavaScript(rt.js, false).then(function () {
+        try { global.__mhubSplashFailed = false; } catch (e) {}
+        log('info', 'splash mounted wc=' + wc.id + ' (' + r + ')');
+      });
     });
   });
   if (p && typeof p.catch === 'function') {
@@ -1889,7 +1937,7 @@ function updateSplash(patch) {
     s.stages = Object.assign({}, DEFAULT_SPLASH.stages);
   }
   if (patch.bgMode !== undefined && /^(follow|custom|color|off)$/.test(patch.bgMode)) s.bgMode = patch.bgMode;
-  if (patch.mode !== undefined && /^(mhub|moon|gallery|dragon|ios|launcher)$/.test(patch.mode)) {
+  if (patch.mode !== undefined && /^(mhub|moon|gallery|dragon|launcher)$/.test(patch.mode)) {
     s.mode = patch.mode;
     /* 切换到 moon 模式时，桌面壁纸同步为内置「月光下的持剑少女」。 */
     if (s.mode === 'moon') {
@@ -1946,6 +1994,19 @@ function previewSplash() {
        dom-ready 时 mountSplash 会二次替换 body，导致已经启动的动画实例全部失效 → 黑屏。 */
     win.loadURL(SCHEME + '://ui/splash-preview');
     const wc = win.webContents;
+    /* 预览窗口也记一份关键日志：动画自身报错 / 渲染诊断能直接落到插件日志里 */
+    try {
+      wc.on('console-message', function () {
+        const args = Array.prototype.slice.call(arguments);
+        let text = null;
+        if (typeof args[2] === 'string') text = args[2];
+        else if (args[0] && typeof args[0].message === 'string') text = args[0].message;
+        else if (typeof args[1] === 'string') text = args[1];
+        if (text && /mhub-wp-diag|Uncaught|WebGL|THREE|Shader/i.test(text)) {
+          log('preview-console', String(text).slice(0, 500));
+        }
+      });
+    } catch (e) { /* ignore */ }
     wc.once('did-finish-load', function () {
       let rt;
       try { rt = buildSplashRuntime(); } catch (e) {
@@ -1962,6 +2023,8 @@ function previewSplash() {
         return wc.insertCSS(rt.css);
       }).then(function () {
         return wc.executeJavaScript(mount, false);
+      }).then(function () {
+        return injectLauncherBundle(wc, cfg && cfg.mode);
       }).then(function () {
         return wc.executeJavaScript(rt.js, false);
       }).then(function () {
@@ -2355,7 +2418,7 @@ function attach(wc) {
         else if (args[0] && typeof args[0].message === 'string') text = args[0].message;
         else if (typeof args[1] === 'string') text = args[1];
         if (!text || text.indexOf(PREFIX) !== 0) {
-          if (text && /mhub-wp|Uncaught|SyntaxError|TypeError|ReferenceError/i.test(text)) {
+          if (text && /mhub-wp|Uncaught|SyntaxError|TypeError|ReferenceError|WebGL|THREE|Shader/i.test(text)) {
             log('page-console', String(text).slice(0, 400));
           }
           return;

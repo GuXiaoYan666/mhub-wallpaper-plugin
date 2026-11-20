@@ -35,16 +35,20 @@ let finishNotified=false;
 container.innerHTML=''
 +'<div id="loading"></div>'
 +'<div id="handoff-veil" style="display:none"></div>'
-+'<main id="destination" style="display:none"></div>'
++'<main id="destination" style="display:none"></main>'
 +'<div id="stage" style="position:fixed;inset:0;z-index:2"></div>'
 +'<div id="controls" style="display:none"><span id="status"></span><span id="time"></span>'
 +'<input id="progress" type="range" min="0" max="24" step="0.01" value="0">'
 +'<button id="replay"></button><button id="pause"></button><button id="slow"></button><button id="again"></button>'
 +'<label><input id="hold" type="checkbox"></label><button id="ready"></button><button id="fullscreen"></button></div>';
 const smooth=t=>{t=clamp(t,0,1);return t*t*t*(t*(t*6-15)+10)};
-const scene=new THREE.Scene(), camera=new THREE.PerspectiveCamera(38,innerWidth/innerHeight,12,12000);
+/* 启动窗口可能在隐藏/未布局时加载页面，innerWidth/Height 会是 0，
+   导致画布 0×0 完全看不见；这里做兜底并在窗口迟到显示后重新测量。 */
+const viewW=()=>innerWidth||document.documentElement.clientWidth||1600;
+const viewH=()=>innerHeight||document.documentElement.clientHeight||900;
+const scene=new THREE.Scene(), camera=new THREE.PerspectiveCamera(38,viewW()/viewH(),12,12000);
 const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true,powerPreference:'high-performance'});
-renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);renderer.setClearColor(0x000000,0);renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=theme==='light'?.88:1.05;$('#stage').appendChild(renderer.domElement);
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(viewW(),viewH());renderer.setClearColor(0x000000,0);renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=theme==='light'?.88:1.05;$('#stage').appendChild(renderer.domElement);
 scene.add(new THREE.HemisphereLight(0xf6f4ff,0x151320,2.1));
 for(const [p,col,intensity] of [[[100,400,600],0xfff3e8,3.4],[[-500,-200,300],0x8baeff,2.2],[[300,0,-100],0xff9bd9,2]]){let l=new THREE.DirectionalLight(col,intensity);l.position.set(...p);scene.add(l)}
 const palette=(theme==='light'?['#df313d','#db7327','#bf9d25','#359968','#268cbc','#7060ce','#bf5fa3']:['#ff595a','#ff9b45','#f6d960','#81dba1','#55b8ec','#8b81ed','#e992cf']).map(c=>new THREE.Color(c));
@@ -441,6 +445,9 @@ for(let k=0;k<branches.length;k++){
 }
 
 if(!finished){renderer.setRenderTarget(null);renderer.clear();renderer.render(scene,camera)}}
-function resize(){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);}addEventListener('resize',resize);resize();requestAnimationFrame(render);$('#loading').remove();notify('loaded');
+function resize(){camera.aspect=viewW()/viewH();camera.updateProjectionMatrix();renderer.setSize(viewW(),viewH());}addEventListener('resize',resize);resize();setTimeout(resize,320);setTimeout(resize,1200);requestAnimationFrame(render);$('#loading').remove();notify('loaded');
+/* 渲染诊断（写入 M HUB 插件日志）：绘制调用数 / 三角形数 / WebGL 错误码 */
+let diagN=0;function diagRender(){try{const gl=renderer.getContext();console.log('[mhub-wp-diag]'+JSON.stringify({tag:'render',n:diagN,calls:renderer.info.render.calls,tris:renderer.info.render.triangles,glErr:gl?gl.getError():-1,lost:gl?gl.isContextLost():false,w:renderer.domElement.width,h:renderer.domElement.height,state:document.body.dataset.state||''}))}catch(e){}}
+setTimeout(()=>{diagN=1;diagRender()},1200);setTimeout(()=>{diagN=2;diagRender()},3600);
 renderer.domElement.addEventListener('webglcontextlost',e=>{e.preventDefault();notify('renderFailed');if(!finishNotified){finishNotified=true;try{onFinish(600)}catch(e){}}});
 }
