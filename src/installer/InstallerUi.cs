@@ -492,9 +492,10 @@ namespace MHubStartupPlugin
             _restoreLink = new PillButton();
             _restoreLink.DarkStyle = false;
             _restoreLink.BorderOnly = true;
-            _restoreLink.Text = "还原官方文件";
+            /* 明确的卸载入口：卸载插件并还原官方文件（保留用户配置与数据）。 */
+            _restoreLink.Text = "卸载插件（还原官方文件）";
             _restoreLink.Font = F(9f, FontStyle.Regular);
-            _restoreLink.SetBounds(400, 496, 160, 34);
+            _restoreLink.SetBounds(360, 496, 240, 34);
             _restoreLink.Click += UninstallButtonClick;
 
             _statusDot = new SpecDot();
@@ -653,7 +654,7 @@ namespace MHubStartupPlugin
             DialogResult confirm = MessageBox.Show(this,
                 "将恢复官方入口与归档，并移除本安装器拥有且未被修改的文件。\r\n" +
                 "壁纸参数、桌宠配置、成长数据、日志、高清缓存和用户导入图集均会保留。\r\n\r\n是否继续？",
-                "卸载并安全还原", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                "卸载插件", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (confirm != DialogResult.Yes) return;
             RunOperation(false, dir, null);
         }

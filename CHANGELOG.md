@@ -5,6 +5,10 @@
 作者：顾小颜
 
 ### 新增与修复
+- 修复「手写欢迎」启动时弹出「A JavaScript error occurred in the main process」：`BrowserWindow` 的 close 事件没有 `stopPropagation`，主进程拦截里误调用导致抛错；已改为只调用 `preventDefault`。
+- 龙娘启动动画结尾改为多停一拍 + 1.5s 慢淡出，不再直接从视频最后一帧跳进主窗口。
+- 安装器新增明确的「卸载插件（还原官方文件）」按钮，卸载时保留壁纸参数、桌宠配置与用户图集。
+- 修复壁纸引擎装在 G/D 盘等非系统盘时识别不到壁纸：除了注册表与默认路径，现在会扫描各盘符的 Steam / SteamLibrary / steamapps 库、`libraryfolders.vdf` 以及各盘的壁纸引擎目录。
 - 龙娘启动动画结尾换成真实 M HUB 主界面（整窗替换、龙女保留在前景），标题改为居中的「M HUB」，不再显示「M HUB Start」。
 - 修复「手写 welcome」启动动画黑屏：iOS 分支的定时器集合未初始化，脚本一推就抛 TypeError 直接退出。
 - 修复启动动画只播 1-2 秒就结束：驱动主窗口一就绪就把启动页压到后面；现在启动动画期间启动页保持置顶，播完才交还主窗口。

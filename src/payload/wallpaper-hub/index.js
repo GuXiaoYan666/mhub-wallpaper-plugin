@@ -320,6 +320,34 @@ function steamPathFromRegistry() {
   return exe ? path.dirname(exe) : '';
 }
 
+function fixedDrives() {
+  const drives = [];
+  for (let n = 67; n <= 90; n++) {
+    const drive = String.fromCharCode(n) + ':\\';
+    if (isDirectory(drive)) drives.push(drive);
+  }
+  return drives;
+}
+
+/* 只靠注册表找不到"装在非系统盘"的 Steam / 壁纸引擎：
+   常见情况是 Steam 或 steamapps 库放在 G:/D: 这类数据盘，注册表仍指向旧路径。
+   这里按盘符做一层浅扫描，把带 steamapps 的目录和壁纸引擎目录捞出来。 */
+function driveRootDirs() {
+  const out = new Set();
+  for (const drive of fixedDrives()) {
+    out.add(drive);
+    let children = [];
+    try {
+      children = fs.readdirSync(drive, { withFileTypes: true }).filter(function (d) { return d.isDirectory(); });
+    } catch (e) { continue; }
+    for (const child of children) {
+      const dir = path.join(drive, child.name);
+      if (/steam|library|game|program files|wallpaper|wegame|tencent|valve/i.test(child.name)) out.add(dir);
+    }
+  }
+  return [...out];
+}
+
 function steamLibraries() {
   const roots = new Set();
   const reg = steamPathFromRegistry();
@@ -333,6 +361,17 @@ function steamLibraries() {
   const pf = process.env.ProgramFiles || 'C:\\Program Files';
   roots.add(path.join(pf86, 'Steam'));
   roots.add(path.join(pf, 'Steam'));
+  /* 各盘符里的 Steam / SteamLibrary / steamapps 目录（含 G: 等非系统盘） */
+  for (const dir of driveRootDirs()) {
+    if (isDirectory(path.join(dir, 'steamapps'))) {
+      roots.add(dir);
+      continue;
+    }
+    for (const name of ['Steam', 'steam', 'SteamLibrary', 'steamlibrary']) {
+      const sub = path.join(dir, name);
+      if (isDirectory(path.join(sub, 'steamapps'))) roots.add(sub);
+    }
+  }
 
   const libs = new Set();
   for (const root of roots) {
@@ -469,6 +508,22 @@ function commonWeGameDirs() {
   return [...dirs];
 }
 
+/* 直接在各盘符根目录 / 常见目录里找壁纸引擎本体，
+   覆盖"壁纸引擎装在 G 盘、又没进注册表卸载项"的情况。 */
+function driveEngineDirs() {
+  const dirs = new Set();
+  for (const dir of driveRootDirs()) {
+    if (validEngineDir(dir)) dirs.add(dir);
+    const steamCommon = path.join(dir, 'steamapps', 'common', 'wallpaper_engine');
+    if (validEngineDir(steamCommon)) dirs.add(steamCommon);
+    for (const name of ['Wallpaper Engine', 'wallpaper_engine', 'WallpaperEngine']) {
+      const sub = path.join(dir, name);
+      if (validEngineDir(sub)) dirs.add(sub);
+    }
+  }
+  return [...dirs];
+}
+
 function additionalEngines() {
   const result = [];
   const seen = new Set();
@@ -483,6 +538,7 @@ function additionalEngines() {
   }
   for (const dir of wallpaperUninstallDirs()) add(dir, false);
   for (const dir of commonWeGameDirs()) add(dir, true);
+  for (const dir of driveEngineDirs()) add(dir, false);
   for (const dir of runningEngineDirs()) add(dir, false);
   return result;
 }
@@ -2219,8 +2275,8 @@ function installSplashGuard(wc) {
       url.indexOf('#done') !== -1 || title.indexOf('#done') !== -1;
     if (!finished) {
       try { log('info', 'splash close BLOCKED by main-process guard, since=' + since + 'ms'); } catch (_) {}
-      e.preventDefault();
-      e.stopPropagation();
+      /* BrowserWindow 的 close 事件只提供 preventDefault，没有 stopPropagation。 */
+      try { if (e && typeof e.preventDefault === 'function') e.preventDefault(); } catch (_) {}
       return false;
     }
     release();

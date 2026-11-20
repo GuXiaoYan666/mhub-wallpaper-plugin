@@ -234,6 +234,7 @@
       var fade = Math.max(240, Number(fadeMs) || 600)
       try { location.hash = 'done' } catch (e) {}
       try { document.title = 'M HUB #done' } catch (e) {}
+      wrap.style.transitionTimingFunction = 'cubic-bezier(.4,0,.2,1)'
       wrap.style.transitionDuration = fade + 'ms'
       wrap.style.opacity = '0'
       setTimeout(function () {
@@ -504,7 +505,8 @@
     video.preload = 'auto'
     video.volume = cfg.sfx ? Math.min(1, Math.max(0, Number(cfg.sfxVolume) || 50) / 100) : 0
     stage.appendChild(video)
-    video.addEventListener('ended', function () { finish(700) })
+    /* 视频最后一帧已经是主界面：末尾多停一拍再慢淡出，避免"啪"一下跳进主窗口。 */
+    video.addEventListener('ended', function () { setTimeout(function () { finish(1500) }, 260) })
     video.addEventListener('error', function () { finish(320) })
     /* 视频时长已知后延长保护窗口，让整段动画播完再交还主窗口 */
     video.addEventListener('loadedmetadata', function () {
