@@ -468,7 +468,10 @@ function createPetWindow(ctx) {
       clickThroughApplied = null;
       applyAlwaysOnTop(current.alwaysOnTop);
       applyClickThrough(current.clickThrough);
+      const created = win;
       win.on('closed', () => {
+        /* 重建窗口时旧窗口的 closed 可能晚于新窗口创建，只清理自己那一份引用。 */
+        if (win !== created) return;
         cancelInertia();
         cancelSizeAnim();
         clearDragWatchdog();
@@ -499,9 +502,12 @@ function createPetWindow(ctx) {
     return win;
   }
 
-  // Windows 上透明无边框窗口 hide() 后再 show()，命中的鼠标输入状态与窗口层级可能丢失。
-  // 清掉缓存后重新断言置顶与点击穿透，并在下一个事件循环再补一次，
-  // 避免 showInactive 尚未完成时 setIgnoreMouseEvents / setAlwaysOnTop 被系统忽略。
+  let showTimers = [];
+  let hiddenByUser = false;
+  let reopenFresh = false;
+
+  // Windows 上透明无边框窗口 hide() 后再 show()，命中的鼠标输入状态与窗口层级可能丢失，
+  // 表现为「再显示后拖不动」。显示后重新断言一次置顶与点击穿透，并在窗口真正显示后补断言。
   function assertInputState() {
     if (!isAlive()) return;
     alwaysOnTopApplied = null;
@@ -510,31 +516,49 @@ function createPetWindow(ctx) {
     applyClickThrough(settings().clickThrough);
   }
 
+  function clearShowTimers() {
+    for (let i = 0; i < showTimers.length; i += 1) clearTimeout(showTimers[i]);
+    showTimers = [];
+  }
+
   function show() {
-    if (settings().scale === 0) {
+    const current = settings();
+    if (current.scale === 0) {
       hide();
       return false;
     }
+    /* 用户隐藏过之后再显示：直接重建窗口最可靠，彻底避开 Windows 透明窗口
+       hide→show 后鼠标命中区域不恢复的问题。 */
+    if (reopenFresh && isAlive()) {
+      clearShowTimers();
+      try { win.destroy(); } catch (e) { /* ignore */ }
+      win = null;
+      reopenFresh = false;
+      dragging = false;
+      roaming = false;
+    }
     const target = ensure();
     if (!target) return false;
+    hiddenByUser = false;
     try {
       if (!target.isVisible()) target.showInactive();
       assertInputState();
-      if (settings().alwaysOnTop !== false) {
+      if (current.alwaysOnTop !== false) {
         try { target.moveTop(); } catch (e) { /* ignore */ }
       }
-      /* showInactive 完成前设置输入状态可能被系统忽略；分多次补断言，
-         并顺带修复「窗口已在但 isVisible 仍为 false」的偶发状态。 */
+      /* 分多次补断言，同时记录定时器，用户隐藏时可以全部取消，避免迟到的定时器把窗口又显示出来。 */
+      clearShowTimers();
       [120, 360, 900].forEach(function (delay) {
-        setTimeout(function () {
-          if (!isAlive()) return;
+        showTimers.push(setTimeout(function () {
+          if (!isAlive() || hiddenByUser) return;
           try { if (!win.isVisible()) win.showInactive(); } catch (e) { /* ignore */ }
           assertInputState();
           if (settings().alwaysOnTop !== false) {
             try { win.moveTop(); } catch (e) { /* ignore */ }
           }
-        }, delay);
+        }, delay));
       });
+      log('info', 'shown');
       return true;
     } catch (err) {
       log('warn', 'show failed', err);
@@ -545,9 +569,14 @@ function createPetWindow(ctx) {
   function hide() {
     if (!isAlive()) return false;
     try {
+      /* 先取消显示后的补断言，否则它们会在隐藏后把窗口重新 showInactive 出来。 */
+      clearShowTimers();
+      hiddenByUser = true;
+      reopenFresh = true;
       /* 隐藏时如果还处在拖拽状态，先把拖拽收口，避免再次显示后残留 dragging 标记。 */
       if (dragging) endDrag(null, { persist: false });
       if (win.isVisible()) win.hide();
+      log('info', 'hidden');
       return true;
     } catch (err) {
       log('warn', 'hide failed', err);

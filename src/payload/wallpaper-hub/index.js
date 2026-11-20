@@ -31,7 +31,7 @@ const VIDEO_EXT = ['.mp4', '.webm', '.mov', '.mkv'];
 const IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
 const MAX_MANUAL_DEPTH = 4;
 const MAX_MANUAL_DIRS = 500;
-const VERSION = '4.0';
+const VERSION = '4.1';
 const AUTHOR = '顾小颜';
 
 function ensureDir(dir) {
@@ -76,6 +76,7 @@ const DEFAULT_BEAUTIFY = {
 
 const DEFAULT_SPLASH = {
   enabled: true,
+  mode: 'mhub',              // mhub=原生六幕 / moon=月下少女 / gallery=图片开场 / dragon=龙娘 / ios=液态玻璃
   bgMode: 'follow',          // follow=跟随壁纸 custom=指定壁纸 color=纯色 off=不铺背景
   bgId: '',
   bgColor: '#05070c',
@@ -103,6 +104,7 @@ const DEFAULT_SPLASH = {
   voicePitch: 0.9,
   identityName: 'MCHOSE USER',
   identityId: 'MCHOSE-01',
+  welcomeName: 'Jay',
   accessLevel: '03',
   accent: '#1f63ff',
   glitchA: '#ff3b30',
@@ -111,6 +113,48 @@ const DEFAULT_SPLASH = {
      全部 false 时直接收窗，跳过全部动画。 */
   stages: { intro: true, setup: true, steps: true, welcome: true }
 };
+
+/* ── 内置壁纸：随启动动画联动（如选「月光下的持剑少女」则桌面壁纸同步为该图）─────
+   文件随 payload 打包在 wallpaper-hub/assets/ 下，运行时 __dirname 指向 wallpaper-hub。 */
+const BUILTIN_WALLPAPERS = {
+  moon: { id: 'builtin:moon', title: '月光下的持剑少女', file: path.join(__dirname, 'assets', 'moon-wallpaper.jpg') }
+};
+function ensureBuiltinItems(ctx) {
+  for (const key of Object.keys(BUILTIN_WALLPAPERS)) {
+    const b = BUILTIN_WALLPAPERS[key];
+    if (ctx.byId.has(b.id)) continue;
+    let ok = false;
+    try { ok = !!b.file && fs.existsSync(b.file); } catch (e) { ok = false; }
+    if (!ok) continue;
+    ctx.items.push({
+      id: b.id, title: b.title, type: '', typeLabel: 'M HUB 内置', tags: [],
+      preview: SCHEME + '://img/preview/' + encodeURIComponent(b.id),
+      thumb: SCHEME + '://img/thumb/' + encodeURIComponent(b.id),
+      kind: 'image', source: 'builtin', libraryId: 'builtin', adult: false
+    });
+    ctx.byId.set(b.id, {
+      dir: path.dirname(b.file), projectJson: '', preview: b.file, image: b.file,
+      video: '', scenePkg: '', sceneEntry: '', webEntry: '', kind: 'image',
+      props: [], source: 'builtin', libraryId: 'builtin'
+    });
+  }
+}
+/* 启动动画模式 ↔ 桌面壁纸联动：当前仅 moon 模式联动到内置 moon 壁纸。 */
+function applyModeWallpaperSync() {
+  if (state.splash.mode !== 'moon') return false;
+  if (!state.byId || !state.byId.has('builtin:moon')) return false;
+  if (state.bgId === 'builtin:moon') return false;
+  setBackground('builtin:moon');
+  return true;
+}
+/* 注入到启动页的配置（含运行时壁纸地址 wpBg，供 ios 模式把背景同步为驱动壁纸）。
+   不写回 state.splash，避免把运行时 URL 持久化到 state.json。 */
+function splashConfigForInject() {
+  const cfg = Object.assign({}, state.splash);
+  try { cfg.wpBg = splashBg(); } catch (e) { cfg.wpBg = null; }
+  return cfg;
+}
+let initialModeSyncDone = false;
 
 const DEFAULT_HOTKEYS = {
   next: 'Alt+Right',
@@ -175,6 +219,7 @@ const state = {
       if (saved.splash[key] !== undefined) state.splash[key] = saved.splash[key];
     }
   }
+  if (['mhub', 'moon', 'gallery', 'dragon', 'ios'].indexOf(state.splash.mode) === -1) state.splash.mode = 'mhub';
   if (saved.hotkeys && typeof saved.hotkeys === 'object') {
     for (const key of Object.keys(DEFAULT_HOTKEYS)) {
       if (typeof saved.hotkeys[key] === 'string') state.hotkeys[key] = saved.hotkeys[key];
@@ -510,6 +555,26 @@ function generatedProjectId(library, root, dir) {
   return (library.source === 'manual' ? 'm:' : 'g:') + shortHash(library.id + '|' + rel.toLowerCase());
 }
 
+const PROP_LABELS = {
+  ui_browse_properties_scheme_color: '配色方案'
+};
+
+function cleanPropText(value) {
+  return String(value == null ? '' : value)
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<\/(div|p|li|h\d)>/gi, ' ')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#x([0-9a-f]+);/gi, function (_, n) { return String.fromCharCode(parseInt(n, 16)); })
+    .replace(/&#(\d+);/g, function (_, n) { return String.fromCharCode(Number(n)); })
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /* 读取 Wallpaper Engine 项目里 project.json → general.properties 的自定义属性，
    供面板生成与壁纸引擎一致的调节项。 */
 function projectProperties(meta) {
@@ -521,11 +586,33 @@ function projectProperties(meta) {
     if (!p || typeof p !== 'object') continue;
     const type = String(p.type || '').toLowerCase();
     if (!type || type === 'group') continue;
-    const prop = { key: key, label: String(p.text || key).slice(0, 60), type: type, value: p.value };
+    /* 只保留真正需要用户调节的属性：滑块、开关、颜色、下拉、短文本。
+       纯展示文字、链接、文件/目录、脚本等一律不在面板里出现。 */
+    if (type !== 'slider' && type !== 'color' && type !== 'bool' && type !== 'combo' && type !== 'textinput') continue;
+    if (typeof p.value === 'string') {
+      const text = p.value.trim();
+      if (/imgr/i.test(text) || /^https?:\/\//i.test(text) || text.length > 80) continue;
+    }
+    let label = cleanPropText(p.text);
+    if (PROP_LABELS[label]) label = PROP_LABELS[label];
+    /* 未翻译的内部 key（例如 ui_browse_properties_xxx）没有展示价值。 */
+    if (!label || /^ui_[a-z0-9_]+$/i.test(label)) continue;
+    const prop = { key: key, label: label.slice(0, 60), type: type, value: p.value };
     if (p.min !== undefined) prop.min = p.min;
     if (p.max !== undefined) prop.max = p.max;
     if (p.step !== undefined) prop.step = p.step;
-    if (Array.isArray(p.options)) prop.options = p.options.map(function (o) { return String(o); });
+    if (Array.isArray(p.options)) {
+      /* combo 选项既可能是字符串数组，也可能是 {label, value} 对象数组。 */
+      prop.options = p.options.map(function (o, index) {
+        if (o && typeof o === 'object') {
+          return {
+            label: cleanPropText(o.label !== undefined ? o.label : o.value) || String(index),
+            value: o.value !== undefined ? o.value : String(index)
+          };
+        }
+        return { label: String(o), value: String(index) };
+      });
+    }
     if (p.order !== undefined) prop.order = Number(p.order) || 0;
     out.push(prop);
   }
@@ -677,8 +764,14 @@ function scanAll() {
   ctx.items.sort(function (a, b) {
     return String(a.title).localeCompare(String(b.title), 'zh-Hans-CN');
   });
+  ensureBuiltinItems(ctx);
   state.items = ctx.items;
   state.byId = ctx.byId;
+  /* 首次扫描完成后，按当前启动动画模式联动桌面壁纸（如 moon → 内置 moon 壁纸）。 */
+  if (!initialModeSyncDone) {
+    initialModeSyncDone = true;
+    try { applyModeWallpaperSync(); } catch (e) { log('warn', 'initial mode sync: ' + String(e && e.message || e)); }
+  }
   state.libraries = ctx.libraries;
   state.error = null;
   if (!ctx.items.length) {
@@ -1360,7 +1453,7 @@ function pushSplashConfig(wc) {
   const list = wc ? [wc] : startupTargets();
   if (!list.length) return;
   const code = '(function(){try{' +
-    'window.__MHUBSplashConfig=' + toJs(state.splash) + ';' +
+    'window.__MHUBSplashConfig=' + toJs(splashConfigForInject()) + ';' +
     'if(window.__MHUBApplySplashConfig)window.__MHUBApplySplashConfig(window.__MHUBSplashConfig);' +
     'return "ok";}catch(e){return "err:"+e.message;}})()';
   for (const target of list) runIn(target, code);
@@ -1426,9 +1519,34 @@ function buildSplashRuntime() {
   return splashRuntime;
 }
 
+/* 上一次运行遗留的启动页窗口：它们被关闭拦截挡住后一直留在后台，
+   里面的六幕授权动画还在继续放声音，听上去就像"每个动画都带授权音频"。 */
+function closeStaleSplashWindows(current) {
+  const el = electron();
+  if (!el || !el.BrowserWindow) return;
+  const previewWc = previewWin && !previewWin.isDestroyed() ? previewWin.webContents : null;
+  /* 当前挂载的就是预览窗口时不动真正的启动页 */
+  if (previewWc && previewWc === current) return;
+  let list = [];
+  try { list = el.webContents.getAllWebContents(); } catch (e) { return; }
+  for (const wc of list) {
+    if (wc === current || wc === previewWc || wc.isDestroyed()) continue;
+    if (!isStartup(wc)) continue;
+    try {
+      const win = el.BrowserWindow.fromWebContents(wc);
+      if (!win || win.isDestroyed()) continue;
+      global.__mhubSplashForceClose = true;
+      try { win.destroy(); } catch (e) { /* ignore */ }
+      log('info', 'stale splash window closed wc=' + wc.id);
+    } catch (e) { /* ignore */ }
+    finally { global.__mhubSplashForceClose = false; }
+  }
+}
+
 function mountSplash(wc) {
   /* 关闭启动动画时保留官方启动页，不替换内容。 */
   if (!splashAnimationOn()) return;
+  try { closeStaleSplashWindows(wc); } catch (e) { /* ignore */ }
   let rt;
   try {
     rt = buildSplashRuntime();
@@ -1442,11 +1560,17 @@ function mountSplash(wc) {
   const code = '(function(){try{' +
     'if(window.__MHUB_SPLASH_MOUNTED)return "mounted";' +
     'window.__MHUB_SPLASH_MOUNTED=1;' +
+    /* 必须在 splash.js 执行前写入配置：mountSplash 在 dom-ready 才跑，
+       而 attach 早期的注入可能落在 about:blank 上下文里被导航丢弃。
+       缺少这一步时 splash.js 会读默认 mode=mhub，导致所有启动动画都播六幕授权。 */
+    'window.__MHUBSplashConfig=' + toJs(splashConfigForInject()) + ';' +
     'window.__MHUB_SPLASH_ASSETS=' + toJs(rt.assetBase) + ';' +
     'if(!document.body)return "no body";' +
     'document.body.innerHTML=' + toJs(rt.markup) + ';' +
     'return "ok";}catch(e){return "err:"+e.message;}})()';
   const p = wc.executeJavaScript(code, false).then(function (r) {
+    /* 已挂载过的窗口不再重复注入运行时，否则会创建第二套时间线/第二路声音。 */
+    if (r === 'mounted') return;
     return wc.executeJavaScript(rt.js, false).then(function () {
       try { global.__mhubSplashFailed = false; } catch (e) {}
       log('info', 'splash mounted wc=' + wc.id + ' (' + r + ')');
@@ -1697,12 +1821,19 @@ function updateSplash(patch) {
     s.stages = Object.assign({}, DEFAULT_SPLASH.stages);
   }
   if (patch.bgMode !== undefined && /^(follow|custom|color|off)$/.test(patch.bgMode)) s.bgMode = patch.bgMode;
+  if (patch.mode !== undefined && /^(mhub|moon|gallery|dragon|ios)$/.test(patch.mode)) {
+    s.mode = patch.mode;
+    /* 切换到 moon 模式时，桌面壁纸同步为内置「月光下的持剑少女」。 */
+    if (s.mode === 'moon') {
+      try { applyModeWallpaperSync(); } catch (e) { log('warn', 'mode sync: ' + String(e && e.message || e)); }
+    }
+  }
   if (patch.theme !== undefined && /^(auto|light|dark)$/.test(patch.theme)) s.theme = patch.theme;
   if (patch.voiceSource !== undefined) s.voiceSource = patch.voiceSource === 'tts' ? 'tts' : 'asset';
   for (const key of ['bgColor', 'accent', 'glitchA', 'glitchB']) {
     if (patch[key] !== undefined && /^#[0-9a-f]{6}$/i.test(String(patch[key]))) s[key] = String(patch[key]);
   }
-  for (const key of ['bgId', 'identityName', 'identityId', 'accessLevel']) {
+  for (const key of ['bgId', 'identityName', 'identityId', 'accessLevel', 'welcomeName']) {
     if (patch[key] !== undefined) s[key] = String(patch[key]).slice(0, 64);
   }
   saveState();
@@ -1787,10 +1918,14 @@ let scenePayloadAt = '';
 function buildPayload() {
   try {
     let file = path.join(RENDERER_DIR, 'shell.js');
-    const override = path.join(DATA_DIR, 'shell.js');
-    try {
-      if (fs.statSync(override).isFile()) file = override;
-    } catch (e) { /* ignore */ }
+    /* 仅开发调试时允许 %APPDATA%\MCHOSEHUB\wallpaper-hub\shell.js 覆盖内置版本。
+       以前无条件优先会让旧的调试副本一直遮盖安装包里的新界面。 */
+    if (process.env.MHUB_WP_DEV_SHELL === '1') {
+      const override = path.join(DATA_DIR, 'shell.js');
+      try {
+        if (fs.statSync(override).isFile()) file = override;
+      } catch (e) { /* ignore */ }
+    }
     const signature = file + ':' + fs.statSync(file).mtimeMs;
     if (payloadCode && payloadAt === signature) return { code: payloadCode, hash: payloadHash };
     const code = fs.readFileSync(file, 'utf8');
@@ -2027,6 +2162,19 @@ function handleUplink(raw, wc) {  let msg;
   if (t === 'hotkeys') { updateHotkeys(msg.payload); return; }
   if (t === 'splash') { updateSplash(msg.payload); return; }
   if (t === 'splashPreview') { log('info', 'splash preview: ' + previewSplash()); return; }
+  if (t === 'splashAllowClose') {
+    /* JS 层 finish() 发出信号，允许主进程放行 splash 窗口的 close */
+    try {
+      const BrowserWindow = electron().BrowserWindow;
+      const win = BrowserWindow.fromWebContents(wc);
+      if (win && win.__mhubSplashProtected) {
+        win.__mhubSplashAllowClose = true;
+        try { win.setAlwaysOnTop(false); } catch (e) { /* ignore */ }
+        log('info', 'splash ALLOWED close by JS finish signal');
+      }
+    } catch (_) {}
+    return;
+  }
   if (t === 'splashWin') { splashWindowAction(wc, msg.payload && msg.payload.action); return; }
   if (t === 'preview') {
     if (msg.payload && msg.payload.open) openCropWindow();
@@ -2041,17 +2189,76 @@ function handleUplink(raw, wc) {  let msg;
   if (t === 'error') { log('warn', 'page: ' + JSON.stringify(msg).slice(0, 400)); return; }
 }
 
+/* ★★★ 最彻底的 splash 关闭拦截：主进程拦截 BrowserWindow close + hide 事件
+   不管主应用是直接 win.close()、还是调渲染进程的 window.close()、
+   还是 win.hide() 然后 show 主窗口，这里都能拦住。
+   拦截持续到 JS 层 finish() 放行（splashAllowClose）或页面标记 #done。 */
+function installSplashGuard(wc) {
+  if (!wc || wc.isDestroyed() || !isStartup(wc)) return;
+  const el = electron();
+  if (!el || !el.BrowserWindow) return;
+  let win = null;
+  try { win = el.BrowserWindow.fromWebContents(wc); } catch (e) { return; }
+  if (!win || win.isDestroyed() || win.__mhubSplashProtected) return;
+  win.__mhubSplashProtected = true;
+  win.__mhubSplashAllowClose = false;
+  win.__mhubSplashStartTime = Date.now();
+  function release() {
+    try { if (!win.isDestroyed()) win.setAlwaysOnTop(false); } catch (e) { /* ignore */ }
+  }
+  win.on('close', function (e) {
+    const since = Date.now() - (win.__mhubSplashStartTime || Date.now());
+    let url = '';
+    let title = '';
+    try {
+      const other = win.webContents;
+      url = other && !other.isDestroyed() ? (other.getURL() || '') : '';
+      title = String(win.getTitle() || '');
+    } catch (err) { /* ignore */ }
+    const finished = win.__mhubSplashAllowClose ||
+      url.indexOf('#done') !== -1 || title.indexOf('#done') !== -1;
+    if (!finished) {
+      try { log('info', 'splash close BLOCKED by main-process guard, since=' + since + 'ms'); } catch (_) {}
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    }
+    release();
+    try { log('info', 'splash close ALLOWED (finish signal), since=' + since + 'ms'); } catch (_) {}
+    return true;
+  });
+  win.on('hide', function () {
+    if (!win.__mhubSplashAllowClose) {
+      try { log('info', 'splash HIDE blocked (main-process guard)'); } catch (_) {}
+      setTimeout(function () { try { if (!win.isDestroyed() && !win.isMinimized()) win.show(); } catch (_) {} }, 0);
+    }
+  });
+  win.on('closed', release);
+  /* 驱动主窗口 ready-to-show 后会自己 show 到最前面，把启动页压下去——
+     这正是"动画只播 1-2 秒就结束"的观感来源。启动动画期间让启动页始终置顶。 */
+  try {
+    win.setAlwaysOnTop(true, 'screen-saver');
+    if (!win.isVisible()) win.show();
+    win.focus();
+  } catch (e) { /* ignore */ }
+  try { log('info', 'splash main-process guard installed, win=' + win.id + ' wc=' + wc.id); } catch (_) {}
+}
+
 function attach(wc) {
   if (!wc) return;
+  /* 窗口刚创建时 URL 还是 about:blank，isStartup 判定不出来；
+     只在"首次 attach"里装拦截会永远装不上，所以这里每次都要尝试（内部按窗口去重）。 */
+  try { installSplashGuard(wc); } catch (e) { log('warn', 'main-process splash guard install failed: ' + (e && e.message)); }
   if (!attached.has(wc.id)) {
     attached.add(wc.id);
+
     /* 启动页配置必须在 splash.js 加载前就位。
        attach 绑定在 'web-contents-created' 事件——窗口刚创建时 URL 是 about:blank，
        isStartup(wc) 判断不出来，所以**无条件**对所有新 wc 注入配置：
        executeJavaScript 在窗口还没 load 时也不会报错，只是排队等 DOM ready 执行。
        splash.js 是 HTML 里的同步 <script>，解析到标签时才执行，那时配置已在 window 上。 */
     try {
-      runIn(wc, 'try{window.__MHUBSplashConfig=' + toJs(state.splash) + ';}catch(e){}');
+      runIn(wc, 'try{window.__MHUBSplashConfig=' + toJs(splashConfigForInject()) + ';}catch(e){}');
     } catch (e) { /* ignore — 极少数情况下窗口已销毁 */ }
     try {
       wc.on('console-message', function () {
@@ -2076,6 +2283,19 @@ function attach(wc) {
         sceneRuntimePending.delete(wc.id);
         sceneRuntimeEpoch.set(wc.id, (sceneRuntimeEpoch.get(wc.id) || 0) + 1);
         if (isTarget(wc)) setTimeout(function () { inject(wc); }, 250);
+      });
+    } catch (e) { /* ignore */ }
+    /* ★ 场景壁纸属性面板消失修复：SPA 路由切换（退出主题设置再进）
+       不会触发 did-finish-load，但会触发 did-navigate。
+       每次 navigate 后重新 pushState 确保 panel 组件拿到 props 数据。 */
+    try {
+      wc.on('did-navigate', function () {
+        if (isTarget(wc)) {
+          setTimeout(function () {
+            try { inject(wc); } catch (_) {}
+            try { pushState(wc); } catch (_) {}
+          }, 300);
+        }
       });
     } catch (e) { /* ignore */ }
     try {

@@ -51,7 +51,7 @@ foreach ($entry in $petManifest.files) {
 $petPayloadRoot = Join-Path $petRoot 'payload'
 $petPayloadFiles = @(Get-ChildItem -LiteralPath $petPayloadRoot -Recurse -File)
 $petPayloadEntries = @($petManifest.files | Where-Object { $_.path -like 'payload/*' })
-if ($petPayloadFiles.Count -ne 61 -or $petPayloadEntries.Count -ne [int]$petManifest.payload.fileCount) {
+if ($petPayloadFiles.Count -ne 63 -or $petPayloadEntries.Count -ne [int]$petManifest.payload.fileCount) {
     throw 'pet-hub payload file count mismatch'
 }
 $petPayloadBytes = ($petPayloadFiles | Measure-Object Length -Sum).Sum
@@ -59,7 +59,7 @@ if ($petPayloadBytes -ne [int64]$petManifest.payload.bytes) {
     throw 'pet-hub payload byte count mismatch'
 }
 $petIndexHash = (Get-FileHash -LiteralPath (Join-Path $petPayloadRoot 'index.js') -Algorithm SHA256).Hash
-if ($petIndexHash -ne 'A2D311D4C7856194344A878445230147D1BE9ED7B88364642E6EAFC8AC7B5D20') {
+if ($petIndexHash -ne '9E8EB4DF864445C6EB389F28E4A912D4EDE7C9587DC46606D2B431F3CC2A7925') {
     throw 'pet-hub payload/index.js SHA256 mismatch'
 }
 

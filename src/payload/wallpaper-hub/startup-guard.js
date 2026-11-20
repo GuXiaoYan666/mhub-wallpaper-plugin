@@ -32,6 +32,8 @@
           var url = '';
           var title = '';
           try {
+            /* 插件主动清理上一次遗留的启动页窗口时直接放行。 */
+            if (global.__mhubSplashForceClose === true) return orig.apply(this, arguments);
             /* 仅在自定义启动动画开启时拦截；关闭时完全沿用官方启动页的关闭节奏。 */
             if (global.__mhubSplashAnimation !== true) return orig.apply(this, arguments);
             var wc = this.webContents;

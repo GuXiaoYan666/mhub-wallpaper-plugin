@@ -12,11 +12,29 @@
     var root = document.documentElement;
     root.classList.remove('theme-light', 'theme-dark');
     root.classList.add(dark ? 'theme-dark' : 'theme-light');
-    /* 主进程可能在 splash.js 还没执行时就调用：先排队，运行时就绪后接管 */
+
+    /* 主进程可能在 splash.js 还没执行时就调用 dismissStartup，先排队，运行时就绪后接管 */
     var queue = [];
     window.__startupDismissQueue = queue;
     window.dismissStartup = function (fadeMs) {
       return new Promise(function (resolve) { queue.push({ fadeMs: fadeMs, resolve: resolve }); });
+    };
+
+    /* ★★★ 关键修复：主进程可能直接 BrowserWindow.close()，
+       这会在 defer 的 splash.js 执行之前就被触发。
+       最早时机拦截 window.close()，给自定义动画至少 3.5s 保护 */
+    var startedAtHtml = Date.now();
+    var MIN_PROTECT = 3500;
+    var realCloseHtml = window.close.bind(window);
+    window.close = function () {
+      var since = Date.now() - startedAtHtml;
+      if (since < MIN_PROTECT) {
+        /* 保护窗口内：阻止直接 close，等 splash.js 接管后继续保护 */
+        try { console.log('[mhub-wp]', JSON.stringify({ t: 'html-close-blocked', since: since })); } catch (e) {}
+        setTimeout(realCloseHtml, MIN_PROTECT - since + 100);
+        return;
+      }
+      realCloseHtml();
     };
   })();
 </script>

@@ -1070,11 +1070,8 @@ function closeSettings() {
 function libraryFor() {
   if (!petLibrary) petLibrary = petLibraryModule.createLibrary({
     root: petsModule.defaultPetsDir(),
-    validateImage: imageValidatorModule.createValidator(electron),
-    // Chromium's network stack follows the user's system proxy settings.
-    download: require('./lib/pet-download.js').createDownloader({
-      fetch: electron && electron.net && typeof electron.net.fetch === 'function' ? electron.net.fetch.bind(electron.net) : null
-    })
+    validateImage: imageValidatorModule.createValidator(electron)
+    /* 下载由 pet-library 内部统一处理：Chromium → Node → 系统 curl 三级兜底。 */
   });
   return petLibrary;
 }
@@ -1130,7 +1127,7 @@ async function managePet(event, payload, removing) {
     return { ok: true, ...result, state: pushState({ force: true }) || buildState() };
   } catch (error) {
     if (error.code === 'cancelled') return { ok: false, cancelled: true };
-    logger.warn('pet library operation failed', error);
+    logger.warn('pet library operation failed', error, error && error.cause ? ('cause=' + (error.cause.code || error.cause.message)) : '');
     const codes = { EPERM: 'no-permission', EACCES: 'no-permission', ENOENT: 'not-found', EBUSY: 'busy', ENOSPC: 'no-space' };
     return { ok: false, error: codes[error.code] || error.code || 'unknown', id: error.id };
   } finally { if (ownedImport && activeImport === ownedImport) activeImport = null; }

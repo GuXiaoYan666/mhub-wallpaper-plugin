@@ -6,7 +6,32 @@ const crypto = require('crypto');
 const { ID_PATTERN } = require('./pets.js');
 const { parseNpxCommand } = require('../renderer/settings/pets-manage.js');
 const { resolveSource } = require('./pet-sources.js');
-const { download } = require('./pet-download.js');
+const petDownload = require('./pet-download.js');
+const petNet = require('./pet-net.js');
+const { downloadWithCurl } = require('./pet-curl.js');
+/* 优先用 Chromium 网络栈；失败时退回 Node https；仍失败再交给系统 curl。 */
+const primaryDownload = petNet.available ? petDownload.createDownloader({ fetch: petNet.fetchLike }) : null;
+const nodeDownload = petDownload.download;
+async function download(url, limit, context) {
+  if (!primaryDownload) {
+    try { return await nodeDownload(url, limit, context); }
+    catch (error) {
+      if (!error || (error.code !== 'network' && error.code !== 'timeout')) throw error;
+      return downloadWithCurl(url, limit, context);
+    }
+  }
+  try {
+    return await primaryDownload(url, limit, context);
+  } catch (error) {
+    if (!error || (error.code !== 'network' && error.code !== 'timeout')) throw error;
+    try {
+      return await nodeDownload(url, limit, context);
+    } catch (second) {
+      if (!second || (second.code !== 'network' && second.code !== 'timeout')) throw second;
+      return downloadWithCurl(url, limit, context);
+    }
+  }
+}
 
 const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
 const MAX_JSON_BYTES = 128 * 1024;

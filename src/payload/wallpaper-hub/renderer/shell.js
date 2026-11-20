@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '4.0';
+  var VERSION = '4.1';
   var PREFIX = '[mhub-wp]';
   var existing = window.__mhubWallpaper;
   if (existing && existing.version === VERSION) {
@@ -48,6 +48,7 @@
     voicePitch: 0.9,
     identityName: 'MCHOSE USER',
     identityId: 'MCHOSE-01',
+    welcomeName: 'Jay',
     accessLevel: '03',
     accent: '#1f63ff',
     glitchA: '#ff3b30',
@@ -1141,6 +1142,7 @@
 
   /* ---------- 场景属性（Wallpaper Engine project.json → general.properties） ---------- */
   var propsSig = '';
+  var propsCache = { id: '', list: null };
 
   function propState(item) { return (state.props && state.props[item.id]) || {}; }
 
@@ -1225,14 +1227,17 @@
     } else if (kind === 'combo' && Array.isArray(prop.options) && prop.options.length) {
       var sel = document.createElement('select');
       sel.style.cssText = 'max-width:180px;height:24px;border-radius:6px;font-size:11px;background:rgba(255,255,255,.06);color:inherit;border:1px solid rgba(255,255,255,.12);';
-      prop.options.forEach(function (text, index) {
+      prop.options.forEach(function (option, index) {
         var opt = document.createElement('option');
-        opt.value = String(index);
-        opt.textContent = text;
+        var value = option && typeof option === 'object' ? option.value : String(index);
+        var label = option && typeof option === 'object' ? option.label : String(option);
+        opt.value = String(value);
+        opt.textContent = String(label);
         sel.appendChild(opt);
       });
-      sel.value = String(Number(value) || 0);
-      sel.addEventListener('change', function () { sendProp(item, prop.key, Number(sel.value) || 0); });
+      sel.value = value === undefined || value === null ? String(prop.options[0] && prop.options[0].value !== undefined ? prop.options[0].value : 0) : String(value);
+      if (!sel.value && prop.options.length) sel.selectedIndex = 0;
+      sel.addEventListener('change', function () { sendProp(item, prop.key, sel.value); });
       row.appendChild(sel);
       store[prop.key] = { kind: 'combo', input: sel };
     } else if (kind === 'text') {
@@ -1253,6 +1258,12 @@
     if (!panel || !panel.__refs || !panel.__refs.propsBox) return;
     var box = panel.__refs.propsBox;
     var list = item && Array.isArray(item.props) && (item.kind === 'scene' || item.kind === 'web') ? item.props : null;
+    if (list && list.length) {
+      propsCache = { id: item.id, list: list };
+    } else if (item && propsCache.id === item.id && propsCache.list && propsCache.list.length) {
+      /* 从主题设置退出再进入时 item.props 可能被重扫清空，用上次缓存兜底，避免属性面板消失 */
+      list = propsCache.list;
+    }
     if (!list || !list.length) {
       box.style.display = 'none';
       propsSig = '';
@@ -1284,7 +1295,7 @@
       } else if (meta.kind === 'bool') {
         meta.input.checked = !!value;
       } else if (meta.kind === 'combo') {
-        if (document.activeElement !== meta.input) meta.input.value = String(Number(value) || 0);
+        if (document.activeElement !== meta.input) meta.input.value = String(value);
       } else if (meta.kind === 'text') {
         if (document.activeElement !== meta.input) meta.input.value = String(value == null ? '' : value);
       }
@@ -1556,7 +1567,9 @@
     sel.addEventListener('change', function () {
       state.splash[key] = sel.value;
       saveSplash();
-      renderSplashPanel();
+      /* 动画类型会决定六幕专属设置是否显示，必须整块重建而不是只同步数值 */
+      if (key === 'mode') rebuildSplashPanel();
+      else renderSplashPanel();
     });
     row.appendChild(head);
     row.appendChild(sel);
@@ -1636,6 +1649,7 @@
   }
 
   function buildSplashPanel() {
+    var altMode = state.splash.mode && state.splash.mode !== 'mhub';
     var sec = el('section', 'mhub-wp-card');
     sec.id = 'mhub-splash-panel';
     sec.setAttribute('data-mhub-wp', '1');
@@ -1646,7 +1660,9 @@
     mark.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M4.2 7.5l2.6 1.5M17.2 15l2.6 1.5M4.2 16.5l2.6-1.5M17.2 9l2.6-1.5"/><circle cx="12" cy="12" r="3.2"/></svg>';
     var titles = el('div', 'mhub-wp-titles');
     titles.appendChild(el('h3', 'mhub-wp-title', 'M HUB 启动页'));
-    titles.appendChild(el('p', 'mhub-wp-sub', '六幕授权序列 · 液态玻璃 · 真声音效 · 实时调参'));
+    titles.appendChild(el('p', 'mhub-wp-sub', altMode
+      ? '视频 / 图片 / 液态玻璃动画 · 实时调参'
+      : '六幕授权序列 · 液态玻璃 · 真声音效 · 实时调参'));
     brand.appendChild(mark);
     brand.appendChild(titles);
 
@@ -1728,6 +1744,20 @@
 
     /* 动画 */
     body.appendChild(spGroup('动画与交互'));
+    var mode = spSelect('启动动画类型', 'mode', [
+      ['mhub', 'M HUB 原生 · 六幕授权'],
+      ['moon', '月下持剑少女 · 线稿上色'],
+      ['gallery', '图片开场 · 相册式'],
+      ['dragon', '龙娘 · 1080P'],
+      ['ios', '手写欢迎 · welcome']
+    ]);
+    refs.selects.push(mode);
+    body.appendChild(mode.row);
+    if (state.splash.mode === 'ios') {
+      var wname = spText('手写名字（welcome 之后）', 'welcomeName', 'Jay');
+      (refs.texts = refs.texts || []).push(wname);
+      body.appendChild(wname.row);
+    }
     var theme = spSelect('主题', 'theme', [['auto', '跟随应用'], ['light', '浅色'], ['dark', '深色']]);
     var speed = spSlider('动画速度', 'speed', 0.35, 3, 0.05, ' ×');
     var confirm = spSwitch('第 1、2 步等待确认', 'requireInteraction');
@@ -1742,8 +1772,13 @@
     body.appendChild(skip.row);
     body.appendChild(startMax.row);
 
+    /* 仅「M HUB 原生六幕」使用的设置：切到视频/图片/iOS 模式时整组隐藏 */
+    var sixOnly = [confirm.row];
+
     /* 分阶段开关：可单独关闭任意段落 */
-    body.appendChild(spGroup('分阶段动画控制'));
+    var stageGroup = spGroup('分阶段动画控制');
+    body.appendChild(stageGroup);
+    sixOnly.push(stageGroup);
     var stageIntro = spStageSwitch('黑幕与洗白（序幕）', 'intro');
     var stageSetup = spStageSwitch('品牌块 / 进度条（底板）', 'setup');
     var stageSteps = spStageSwitch('五步访问授权', 'steps');
@@ -1753,18 +1788,22 @@
     body.appendChild(stageSetup.row);
     body.appendChild(stageSteps.row);
     body.appendChild(stageWelcome.row);
+    sixOnly.push(stageIntro.row, stageSetup.row, stageSteps.row, stageWelcome.row);
 
     /* 音效 */
-    body.appendChild(spGroup('界面音效'));
-    var sfx = spSwitch('界面音效', 'sfx');
-    var sfxVol = spSlider('音效音量', 'sfxVolume', 0, 100, 1, ' %');
+    var sfxGroup = spGroup(altMode ? '视频音量' : '界面音效');
+    body.appendChild(sfxGroup);
+    var sfx = spSwitch(altMode ? '播放视频声音' : '界面音效', 'sfx');
+    var sfxVol = spSlider('音量', 'sfxVolume', 0, 100, 1, ' %');
     refs.switches.push(sfx);
     refs.sliders.push(sfxVol);
     body.appendChild(sfx.row);
     body.appendChild(sfxVol.row);
 
     /* 语音 */
-    body.appendChild(spGroup('语音播报'));
+    var voiceGroup = spGroup('语音播报');
+    body.appendChild(voiceGroup);
+    sixOnly.push(voiceGroup);
     var voice = spSwitch('语音播报', 'voice');
     var vSource = spSelect('语音来源', 'voiceSource', [['asset', '真声素材'], ['tts', '系统合成']]);
     var vVol = spSlider('语音音量', 'voiceVolume', 0, 100, 1, ' %');
@@ -1778,9 +1817,12 @@
     body.appendChild(vVol.row);
     body.appendChild(vRate.row);
     body.appendChild(vPitch.row);
+    sixOnly.push(voice.row, vSource.row, vVol.row, vRate.row, vPitch.row);
 
     /* 视觉 */
-    body.appendChild(spGroup('视觉与身份'));
+    var lookGroup = spGroup('视觉与身份');
+    body.appendChild(lookGroup);
+    sixOnly.push(lookGroup);
     var accent = spColor('强调色', 'accent');
     var glitchA = spColor('故障色 A', 'glitchA');
     var glitchB = spColor('故障色 B', 'glitchB');
@@ -1795,7 +1837,10 @@
     body.appendChild(idName.row);
     body.appendChild(idCode.row);
     body.appendChild(idLevel.row);
+    sixOnly.push(accent.row, glitchA.row, glitchB.row, idName.row, idCode.row, idLevel.row);
 
+    /* 六幕专属设置整体隐藏（面板头部与音效文案已按模式切换） */
+    for (var si = 0; si < sixOnly.length; si++) sixOnly[si].hidden = altMode;
     sec.appendChild(body);
 
     var actions = el('div', 'mhub-sp-actions');
@@ -1826,6 +1871,14 @@
     };
     splashPanel.__sig = '';
     return sec;
+  }
+
+  function rebuildSplashPanel() {
+    var old = splashPanel;
+    if (!old || !old.isConnected) { renderSplashPanel(); return; }
+    var fresh = buildSplashPanel();
+    if (old.parentNode) old.parentNode.replaceChild(fresh, old);
+    renderSplashPanel();
   }
 
   function renderSplashPanel() {

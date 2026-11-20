@@ -9,8 +9,8 @@
                  "moduleDir":  "resources/app/pet-hub"
              },
     "payload":  {
-                    "fileCount":  61,
-                    "bytes":  4059089
+                    "fileCount":  63,
+                    "bytes":  4068012
                 },
     "files":  [
                   {
@@ -30,8 +30,8 @@
                   },
                   {
                       "path":  "payload/index.js",
-                      "bytes":  72864,
-                      "sha256":  "a2d311d4c7856194344a878445230147d1be9ed7b88364642e6eafc8ac7b5d20"
+                      "bytes":  72774,
+                      "sha256":  "9e8eb4df864445c6eb389f28e4a912d4ede7c9587dc46606d2b431f3cc2a7925"
                   },
                   {
                       "path":  "payload/lib/config.js",
@@ -145,13 +145,23 @@
                   },
                   {
                       "path":  "payload/lib/pet-download.js",
-                      "bytes":  5522,
-                      "sha256":  "503be63debc7532e3c5675bc9143868f6c503ba07723402e95a9558ebd1d36f3"
+                      "bytes":  7469,
+                      "sha256":  "bc1fb68d09554f617d1744a4acfa4c354470292860c04c63123718f43ea5e521"
                   },
                   {
                       "path":  "payload/lib/pet-library.js",
-                      "bytes":  10595,
-                      "sha256":  "6bff4336a33d73465fc3816a3b2f5701a1173ad6af084c141e11e66f701b7ea5"
+                      "bytes":  11658,
+                      "sha256":  "d786ae9bbd8ce0a3468cadcea2fe326ac210cc4b52cb7b51724899ac3e706bd3"
+                  },
+                  {
+                      "path":  "payload/lib/pet-net.js",
+                      "bytes":  3072,
+                      "sha256":  "95bcae58cc1d41f64f2da4f510e31dc5850c0b8ce9f62faa3e0666fa54ee36d1"
+                  },
+                  {
+                      "path":  "payload/lib/pet-curl.js",
+                      "bytes":  1900,
+                      "sha256":  "3b59fe237467061eeae49198e7c322c083e80592e2f95ce0926060e6d313d5dd"
                   },
                   {
                       "path":  "payload/lib/pet-roam.js",
@@ -170,8 +180,8 @@
                   },
                   {
                       "path":  "payload/lib/pet-window.js",
-                      "bytes":  29966,
-                      "sha256":  "b8e3c5f6dcc187768fb937be98f6ad63d1ad5092ae5a866816d25233aa1344f4"
+                      "bytes":  30997,
+                      "sha256":  "6838c65c628e808034a6f0aff89a2f5ef2fd9c05abf35e4002f7b2b4c89acfa9"
                   },
                   {
                       "path":  "payload/lib/tray.js",
