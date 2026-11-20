@@ -76,7 +76,7 @@ const DEFAULT_BEAUTIFY = {
 
 const DEFAULT_SPLASH = {
   enabled: true,
-  mode: 'mhub',              // mhub=原生六幕 / moon=月下少女 / gallery=图片开场 / dragon=龙娘 / ios=液态玻璃
+  mode: 'mhub',              // mhub=原生六幕 / moon=月下少女 / gallery=图片开场 / dragon=龙娘 / ios=液态玻璃 / launcher=缎带书写
   bgMode: 'follow',          // follow=跟随壁纸 custom=指定壁纸 color=纯色 off=不铺背景
   bgId: '',
   bgColor: '#05070c',
@@ -219,7 +219,7 @@ const state = {
       if (saved.splash[key] !== undefined) state.splash[key] = saved.splash[key];
     }
   }
-  if (['mhub', 'moon', 'gallery', 'dragon', 'ios'].indexOf(state.splash.mode) === -1) state.splash.mode = 'mhub';
+  if (['mhub', 'moon', 'gallery', 'dragon', 'ios', 'launcher'].indexOf(state.splash.mode) === -1) state.splash.mode = 'mhub';
   if (saved.hotkeys && typeof saved.hotkeys === 'object') {
     for (const key of Object.keys(DEFAULT_HOTKEYS)) {
       if (typeof saved.hotkeys[key] === 'string') state.hotkeys[key] = saved.hotkeys[key];
@@ -1889,7 +1889,7 @@ function updateSplash(patch) {
     s.stages = Object.assign({}, DEFAULT_SPLASH.stages);
   }
   if (patch.bgMode !== undefined && /^(follow|custom|color|off)$/.test(patch.bgMode)) s.bgMode = patch.bgMode;
-  if (patch.mode !== undefined && /^(mhub|moon|gallery|dragon|ios)$/.test(patch.mode)) {
+  if (patch.mode !== undefined && /^(mhub|moon|gallery|dragon|ios|launcher)$/.test(patch.mode)) {
     s.mode = patch.mode;
     /* 切换到 moon 模式时，桌面壁纸同步为内置「月光下的持剑少女」。 */
     if (s.mode === 'moon') {

@@ -28,6 +28,7 @@
 - [实现原理](#实现原理)
 - [从源码构建](#从源码构建)
 - [目录结构](#目录结构)
+- [致谢与参考项目](#致谢与参考项目)
 - [常见问题](#常见问题)
 - [免责声明](#免责声明)
 - [许可证](#许可证)
@@ -240,6 +241,27 @@ third_party/pet-hub-patch-1.0.12/  完整桌宠 1.0.12（固定版本，构建�
 assets/screenshots/              README 效果展示截图
 assets/demo/demo.mp4             功能演示视频
 ```
+
+---
+
+## 致谢与参考项目
+
+本插件的启动动画在多个优秀开源项目的基础上二次创作，在此向原作者致谢。所有引用均保留原项目的许可证与出处，主项目许可证不替代第三方组件许可证。
+
+| 启动模式 | 参考项目 | 用途 | 许可证 / 说明 |
+| :--- | :--- | :--- | :--- |
+| 缎带书写（launcher） | [AnsonZhang0129/gpt-launcher](https://github.com/AnsonZhang0129/gpt-launcher) | 彩虹缎带书写、编织、呼吸与镜头穿入动画，移植自其 `src/animation.js` | 原作应用代码采用 [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0)；本插件仅替换 logo（OpenAI → M HUB K 标）、去除 macOS 原生桥接 / i18n / 目的地 mockup，缎带几何、曲率速度场、呼吸与进入逻辑与原版一致 |
+| 图片开场（gallery） | [panding999/codex-startup-animation](https://github.com/panding999/codex-startup-animation) | 透明背景、角色描线、自定义文字的图片开场序列 | 原仓库未声明许可证；本插件对素材、配色与接入方式做了适配 |
+| 原生六幕（mhub） | [6shenhonghong9/dsh-startup-screen](https://github.com/6shenhonghong9/dsh-startup-screen) | 六幕过渡的时间线、序列节奏、版式与交互规则 | [MIT](https://github.com/6shenhonghong9/dsh-startup-screen/blob/main/LICENSE) |
+
+launcher 模式随附的第三方组件：
+
+- **Three.js r170**（[three.js authors](https://github.com/mrdoob/three.js)，MIT © 2010-2024）—— 缎带与镜头的 WebGL 渲染，打包进 `startup-assets/modes/launcher/launcher.bundle.js`。
+- **EMS Allure**（Allura 衍生，[SIL Open Font License 1.1](http://scripts.sil.org/OFL)）—— 手写字形数据，SVG 转换 Windell H. Oskay，平滑处理 Ellen Wasbo + generated stickfont，内联于 `font-data.json`。
+- **esbuild**（MIT）—— 仅用于构建期打包，不随安装包分发。
+- 注：gpt-launcher 原版使用 [simple-icons](https://simpleicons.org/)（CC0）的 OpenAI 图标，本插件已替换为 M HUB K 标，不再包含该图标。
+
+WebWallGL 3.0.1（oneincase，MIT）的说明见下方[许可证](#许可证)一节。
 
 ---
 

@@ -1,5 +1,16 @@
 # 更新日志
 
+## v4.2
+
+作者：顾小颜
+
+### 新增（2026-11-20）
+- 新增「缎带书写」启动动画模式：移植自 [gpt-launcher](https://github.com/AnsonZhang0129/gpt-launcher)，一条彩虹缎带先书写 `Welcome <名字>`，再流向右方编织成 M HUB「K」标，呼吸两次后镜头从六角光圈穿入进入主界面；缎带几何、曲率速度场、呼吸与进入逻辑与原版一致。
+- 「缎带书写」welcome 之后的名字可自定义（默认 `GXY`），播放速度随全局速度滑块缩放；启动页背景自动替换为当前驱动壁纸（模糊 + 暗角），与「手写欢迎」一致。
+- 启动动画设置新增「缎带书写 · welcome → K 标」选项，并复用写名字输入。
+- 补全所有启动动画参考项目的 GitHub 出处致谢（gpt-launcher、codex-startup-animation、dsh-startup-screen、Three.js、EMS Allure 字体等），详见 README「致谢与参考项目」。
+- 安装器与程序集版本更新为 4.2。
+
 ## v4.1
 
 作者：顾小颜

@@ -1749,11 +1749,12 @@
       ['moon', '月下持剑少女 · 线稿上色'],
       ['gallery', '图片开场 · 相册式'],
       ['dragon', '龙娘 · 1080P'],
-      ['ios', '手写欢迎 · welcome']
+      ['ios', '手写欢迎 · welcome'],
+      ['launcher', '缎带书写 · welcome → K 标']
     ]);
     refs.selects.push(mode);
     body.appendChild(mode.row);
-    if (state.splash.mode === 'ios') {
+    if (state.splash.mode === 'ios' || state.splash.mode === 'launcher') {
       var wname = spText('手写名字（welcome 之后）', 'welcomeName', 'Jay');
       (refs.texts = refs.texts || []).push(wname);
       body.appendChild(wname.row);

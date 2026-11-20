@@ -76,7 +76,7 @@
     out.voicePitch = num(out.voicePitch, 0.5, 1.5, 0.9)
     out.theme = /^(auto|light|dark)$/.test(String(out.theme)) ? String(out.theme) : 'auto'
     out.voiceSource = out.voiceSource === 'tts' ? 'tts' : 'asset'
-    out.mode = ['moon', 'gallery', 'dragon', 'ios'].indexOf(String(out.mode)) >= 0 ? String(out.mode) : 'mhub'
+    out.mode = ['moon', 'gallery', 'dragon', 'ios', 'launcher'].indexOf(String(out.mode)) >= 0 ? String(out.mode) : 'mhub'
     out.glass = !!out.glass
     out.enabled = out.enabled !== false
     out.sfx = !!out.sfx
@@ -282,6 +282,10 @@
        ──────────────────────────────────────────────────────────────────────── */
     if (cfg.mode === 'ios') {
       iosWelcomeBranch()
+      return
+    }
+    if (cfg.mode === 'launcher') {
+      launcherBranch()
       return
     }
 
@@ -627,6 +631,96 @@
       /* 录制 MP4 时不让自动收窗打断逐帧渲染 */
       if (!window.__MHUB_SPLASH_RECORD) timer = setTimeout(function () { finish(680) }, totalMs + 260)
       })
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+       缎带书写开机动画（移植自 github.com/AnsonZhang0129/gpt-launcher）
+       一条彩虹缎带：书写 Welcome <名字> → 流向右方 → 编织成 M HUB K 标
+       → 呼吸两次 → 镜头从六角光圈穿入 → 淡出进入主界面。
+       画布透明，背景叠当前驱动壁纸（模糊 + 暗角），与 ios 分支一致。
+       ──────────────────────────────────────────────────────────────────────── */
+    function launcherBranch() {
+      var T = Math.max(0.5, Number(cfg.speed) || 1)
+      wrap.classList.add('launcher')
+
+      /* 样式：透明画布叠在模糊壁纸 + 暗角遮罩之上 */
+      var css = document.createElement('style')
+      css.textContent = [
+        '.dsu-alt.launcher{background:#05060c}',
+        '.dsu-launcher-bg{position:absolute;inset:-6%;z-index:0;overflow:hidden}',
+        '.dsu-launcher-bg img,.dsu-launcher-bg video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;',
+        'filter:blur(40px) saturate(128%) brightness(.46) contrast(1.06);opacity:0;transition:opacity 1.1s ease,filter 1.8s ease;will-change:opacity,filter}',
+        '.launcher.ready .dsu-launcher-bg img,.launcher.ready .dsu-launcher-bg video{opacity:1;filter:blur(28px) saturate(136%) brightness(.52) contrast(1.06)}',
+        '.dsu-launcher-bg-fallback{position:absolute;inset:0;background:radial-gradient(120% 110% at 50% 30%,#3a4376 0%,#1b2042 46%,#07080f 100%)}',
+        '.dsu-launcher-veil{position:absolute;inset:0;z-index:2;pointer-events:none;',
+        'background:radial-gradient(120% 100% at 50% 36%,rgba(4,6,14,.5) 0%,rgba(3,4,10,.74) 56%,rgba(1,2,5,.92) 100%)}',
+        '.dsu-launcher-host{position:absolute;inset:0;z-index:3}',
+        '.dsu-launcher-host canvas{display:block;width:100%;height:100%}',
+        '.launcher .dsu-alt-brand{display:none}'
+      ].join('')
+      document.head.appendChild(css)
+
+      /* 背景：当前驱动壁纸（模糊 + 暗角），与 ios 分支一致 */
+      var bg = document.createElement('div')
+      bg.className = 'dsu-launcher-bg'
+      var wp = cfg.wpBg
+      if (wp && wp.kind === 'video' && wp.url) {
+        var bv = document.createElement('video')
+        bv.src = wp.url; bv.muted = true; bv.loop = true; bv.autoplay = true; bv.playsInline = true
+        if (wp.poster) bv.poster = wp.poster
+        bg.appendChild(bv)
+        try { bv.play().catch(function () {}) } catch (e) {}
+      } else if (wp && wp.kind === 'image' && wp.url) {
+        var bi = document.createElement('img')
+        bi.src = wp.url; bi.alt = ''
+        bg.appendChild(bi)
+      } else {
+        var bf = document.createElement('div')
+        bf.className = 'dsu-launcher-bg-fallback'
+        bg.appendChild(bf)
+      }
+      wrap.appendChild(bg)
+      var veil = document.createElement('div'); veil.className = 'dsu-launcher-veil'; wrap.appendChild(veil)
+
+      /* 动画宿主：缎带 bundle（Three.js）在此容器内创建 #stage + canvas */
+      var host = document.createElement('div')
+      host.className = 'dsu-launcher-host'
+      wrap.appendChild(host)
+
+      requestAnimationFrame(function () { wrap.classList.add('ready') })
+
+      var finDone = false
+      function finishLauncher(fadeMs) {
+        if (finDone) return
+        finDone = true
+        finish(typeof fadeMs === 'number' ? fadeMs : 900)
+      }
+
+      var assetBase = window.__MHUB_SPLASH_ASSETS || './startup-assets/'
+      var s = document.createElement('script')
+      s.src = assetBase + 'modes/launcher/launcher.bundle.js'
+      s.onload = function () {
+        try {
+          if (typeof window.__mhubLauncher !== 'function') { finishLauncher(420); return }
+          /* 动画总时长 ~21s（书写 9s + 连接/编织 3.6s + 呼吸 6s + 进入 2.15s），
+             速度滑块按 T 缩放；保护窗口至少覆盖到进入开始，避免主窗口提前切走。 */
+          altMinPlay = Math.max(altMinPlay, Math.round(20500 / T) + 400)
+          window.__mhubLauncher({
+            container: host,
+            name: cfg.welcomeName,
+            speed: T,
+            onFinish: function (fadeMs) { finishLauncher(fadeMs) }
+          })
+        } catch (e) {
+          try { console.log('[mhub-wp] launcher error: ' + (e && e.message)) } catch (_) {}
+          finishLauncher(420)
+        }
+      }
+      s.onerror = function () { finishLauncher(420) }
+      document.head.appendChild(s)
+
+      /* 兜底：32s 仍未结束则强制收窗，避免 WebGL 异常时卡死 */
+      timer = setTimeout(function () { finishLauncher(700) }, Math.round(32000 / T))
     }
 
     if (cfg.mode === 'gallery') {
